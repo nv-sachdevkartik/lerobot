@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from lerobot.configs.types import PolicyFeature
+from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.constants import ACTION, OBS_STATE
 from lerobot.model.kinematics import RobotKinematics
 from lerobot.processor.pipeline import (
@@ -152,12 +152,12 @@ class EEReferenceAndDelta(ActionProcessor):
         features.pop(f"{ACTION}.target_wy", None)
         features.pop(f"{ACTION}.target_wz", None)
 
-        features[f"{ACTION}.ee.x"] = float
-        features[f"{ACTION}.ee.y"] = float
-        features[f"{ACTION}.ee.z"] = float
-        features[f"{ACTION}.ee.wx"] = float
-        features[f"{ACTION}.ee.wy"] = float
-        features[f"{ACTION}.ee.wz"] = float
+        features["action.ee.x"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
+        features["action.ee.y"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
+        features["action.ee.z"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
+        features["action.ee.wx"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
+        features["action.ee.wy"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
+        features["action.ee.wz"] = (PolicyFeature(type=FeatureType.ACTION, shape=(1,)),)
         return features
 
 
