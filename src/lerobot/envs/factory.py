@@ -19,7 +19,7 @@ from typing import Any
 
 import gymnasium as gym
 
-from .configs import EnvConfig, HubEnvConfig
+from .configs import EnvConfig, HubEnvConfig, LiberoEnv
 from .utils import _call_make_env, _download_hub_file, _import_hub_module, _normalize_hub_result
 
 
@@ -47,7 +47,7 @@ def make_env_pre_post_processors(
     """
     from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 
-    if isinstance(policy_cfg, XVLAConfig):
+    if isinstance(policy_cfg, XVLAConfig) and isinstance(env_cfg, LiberoEnv):
         from lerobot.policies.xvla.processor_xvla import make_xvla_libero_pre_post_processors
 
         return make_xvla_libero_pre_post_processors()
