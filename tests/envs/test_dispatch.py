@@ -11,9 +11,10 @@ import torch
 from gymnasium.envs.registration import register, registry as gym_registry
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.envs.configs import EnvConfig, LiberoEnv
+from lerobot.envs.configs import EnvConfig, IsaaclabArenaEnv, LiberoEnv, LiberoPlusEnv
 from lerobot.envs.factory import make_env, make_env_config, make_env_pre_post_processors
-from lerobot.processor import LiberoProcessorStep
+from lerobot.policies.xvla.configuration_xvla import XVLAConfig
+from lerobot.processor import IsaaclabArenaProcessorStep, LiberoProcessorStep
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_PREFIX, OBS_STATE
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,51 @@ def test_libero_processors_are_policy_agnostic():
 
     assert isinstance(pre.steps[0], LiberoProcessorStep)
     assert len(post.steps) == 0
+
+
+def test_arena_xvla_uses_arena_observations_and_preserves_actions():
+    cfg = IsaaclabArenaEnv(
+        state_keys="joints,gripper",
+        state_dim=3,
+        action_dim=7,
+        camera_keys="front",
+        camera_height=4,
+        camera_width=5,
+        enable_cameras=True,
+    )
+    pre, post = make_env_pre_post_processors(cfg, policy_cfg=XVLAConfig())
+    assert isinstance(pre.steps[0], IsaaclabArenaProcessorStep)
+    state = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    gripper = torch.tensor([[0.0], [1.0]])
+    image = torch.full((2, 4, 5, 3), 255, dtype=torch.uint8)
+
+    observation = pre(
+        {
+            OBS_PREFIX + "policy": {"joints": state, "gripper": gripper},
+            OBS_PREFIX + "camera_obs": {"front": image},
+        }
+    )
+
+    torch.testing.assert_close(observation[OBS_STATE], torch.cat((state, gripper), dim=-1))
+    torch.testing.assert_close(observation[f"{OBS_IMAGES}.front"], torch.ones(2, 3, 4, 5))
+    action = torch.arange(14, dtype=torch.float32).reshape(2, 7)
+    torch.testing.assert_close(post({ACTION: action})[ACTION], action)
+
+
+@pytest.mark.parametrize("env_cls", [LiberoEnv, LiberoPlusEnv])
+def test_xvla_keeps_libero_specific_processors(env_cls):
+    from lerobot.policies.xvla.processor_xvla import make_xvla_libero_pre_post_processors
+
+    pre, post = make_env_pre_post_processors(env_cls(), policy_cfg=XVLAConfig())
+    expected_pre, expected_post = make_xvla_libero_pre_post_processors()
+    assert [type(step) for step in pre.steps] == [type(step) for step in expected_pre.steps]
+    assert [type(step) for step in post.steps] == [type(step) for step in expected_post.steps]
+
+
+def test_xvla_keeps_non_libero_identity_processors():
+    pre, post = make_env_pre_post_processors(make_env_config("aloha"), policy_cfg=XVLAConfig())
+    assert pre.steps == []
+    assert post.steps == []
 
 
 def test_libero_processor_transform_features_replaces_state_components():
