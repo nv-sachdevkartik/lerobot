@@ -2401,8 +2401,14 @@ class GrootN17ActionDecodeStep(ProcessorStep):
         if squeeze_horizon:
             decoded = decoded[:, 0]
         new_transition = transition.copy()
+        # Decoded actions are unnormalized physical targets, not network activations: casting them back
+        # to a reduced-precision compute dtype would quantize the commands sent to the robot, so keep at
+        # least float32 while preserving any wider dtype the caller already used.
+        decoded_dtype = (
+            torch.promote_types(action.dtype, torch.float32) if action.is_floating_point() else action.dtype
+        )
         new_transition[TransitionKey.ACTION] = torch.as_tensor(
-            decoded, dtype=action.dtype, device=action.device
+            decoded, dtype=decoded_dtype, device=action.device
         )
         return new_transition
 
