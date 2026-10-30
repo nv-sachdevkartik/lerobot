@@ -88,7 +88,7 @@ class _NativeAutoresetBatch(gym.vector.VectorEnv):
         return self.call(name)
 
 
-@pytest.mark.parametrize("terminal_reward,terminal_success", [(5.0, False), (5.0, True)])
+@pytest.mark.parametrize("terminal_reward,terminal_success", [(5.0, False), (-5.0, False), (5.0, True)])
 def test_eval_policy_stops_metrics_at_each_slots_first_done(terminal_reward, terminal_success):
     env = _NativeAutoresetBatch(terminal_reward, terminal_success)
     pre, post = make_policy_processor_pipelines([], [])
@@ -113,4 +113,5 @@ def test_eval_policy_stops_metrics_at_each_slots_first_done(terminal_reward, ter
     assert second["success"]
     assert result["aggregated"]["avg_sum_reward"] == (terminal_reward + 6.0) / 2
     assert result["aggregated"]["n_success"] == 1 + int(terminal_success)
+    # Excluded transitions must not add a zero to an entirely negative episode's maximum.
     assert first["max_reward"] == terminal_reward

@@ -585,7 +585,11 @@ def eval_policy(
         # Extend metrics.
         batch_sum_rewards = einops.reduce((rollout_data["reward"] * mask), "b n -> b", "sum")
         sum_rewards.extend(batch_sum_rewards.tolist())
-        batch_max_rewards = einops.reduce((rollout_data["reward"] * mask), "b n -> b", "max")
+        # Masking by multiplication leaves a zero at every excluded index, which floors the maximum at
+        # zero and reports 0.0 for an episode whose rewards are all negative. Exclude those indices.
+        batch_max_rewards = einops.reduce(
+            torch.where(mask.bool(), rollout_data["reward"], -torch.inf), "b n -> b", "max"
+        )
         max_rewards.extend(batch_max_rewards.tolist())
         batch_successes = einops.reduce((rollout_data["success"] * mask), "b n -> b", "any")
         all_successes.extend(batch_successes.tolist())
