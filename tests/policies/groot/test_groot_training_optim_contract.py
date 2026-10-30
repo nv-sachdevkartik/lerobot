@@ -75,15 +75,17 @@ def test_groot_n1_7_scheduler_rounds_fractional_warmup_up_like_transformers():
     assert scheduler_config.num_warmup_steps == 39
 
 
-def test_groot_n1_7_model_parameters_use_fp32_checkpoint_and_optimizer_precision():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_groot_n1_7_model_parameters_use_the_configured_checkpoint_precision(dtype):
+    source_dtype = torch.float32 if dtype == torch.bfloat16 else torch.bfloat16
     module = torch.nn.Module()
-    module.trainable = torch.nn.Parameter(torch.ones(3, dtype=torch.bfloat16))
-    module.frozen = torch.nn.Parameter(torch.ones(3, dtype=torch.bfloat16), requires_grad=False)
+    module.trainable = torch.nn.Parameter(torch.ones(3, dtype=source_dtype))
+    module.frozen = torch.nn.Parameter(torch.ones(3, dtype=source_dtype), requires_grad=False)
 
-    GrootPolicy._cast_model_parameters_to_fp32(module)
+    GrootPolicy._cast_model_parameters(module, dtype)
 
-    assert module.trainable.dtype == torch.float32
-    assert module.frozen.dtype == torch.float32
+    assert module.trainable.dtype == dtype
+    assert module.frozen.dtype == dtype
 
 
 def test_groot_n1_7_ties_unused_qwen_lm_head_to_frozen_input_embeddings():

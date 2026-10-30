@@ -117,15 +117,15 @@ class GrootPolicy(PreTrainedPolicy):
         qwen_model = getattr(backbone, "model", None)
         if qwen_model is not None:
             _tie_unused_qwen_lm_head(qwen_model)
-        if self.config.dtype == torch.float32:
-            self._cast_model_parameters_to_fp32(model)
+        if self.config.dtype is not None:
+            self._cast_model_parameters(model, self.config.dtype)
         return model
 
     @staticmethod
-    def _cast_model_parameters_to_fp32(model: torch.nn.Module) -> None:
+    def _cast_model_parameters(model: torch.nn.Module, dtype: torch.dtype) -> None:
         for parameter in model.parameters():
             if parameter.is_floating_point():
-                parameter.data = parameter.data.to(torch.float32)
+                parameter.data = parameter.data.to(dtype)
 
     @staticmethod
     def _build_weight_decay_parameter_groups(model: torch.nn.Module) -> list[dict[str, Any]]:
