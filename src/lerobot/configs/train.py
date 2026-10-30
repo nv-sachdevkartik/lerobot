@@ -181,6 +181,8 @@ class TrainPipelineConfig(HubMixin):
     # FSDP/DDP tuning knobs, compile & activation-checkpointing placeholders.
     accelerator: AcceleratorConfig = field(default_factory=AcceleratorConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+    # Explicit consent to execute remote code from the Hub (required for hub environments).
+    trust_remote_code: bool = False
     # EMA of the trainable policy weights, enabled with --ema.type (see EMAConfig). In-training env eval and the
     # pushed main branch use the EMA weights.
     ema: EMAConfig | None = None

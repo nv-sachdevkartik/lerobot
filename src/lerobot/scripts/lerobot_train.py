@@ -117,12 +117,15 @@ from .lerobot_eval import eval_policy_all
 
 
 @contextmanager
-def _make_eval_envs(env_cfg: EnvConfig, eval_cfg: EvalConfig) -> Iterator[dict[str, dict[int, Any]]]:
+def _make_eval_envs(
+    env_cfg: EnvConfig, eval_cfg: EvalConfig, trust_remote_code: bool = False
+) -> Iterator[dict[str, dict[int, Any]]]:
     """Create evaluation environments for one run and always dispose of them."""
     envs = make_env(
         env_cfg,
         n_envs=eval_cfg.batch_size,
         use_async_envs=eval_cfg.use_async_envs,
+        trust_remote_code=trust_remote_code,
     )
     try:
         yield envs
@@ -972,7 +975,7 @@ def train(cfg: TrainPipelineConfig) -> None:
                 # weights stay in sync across ranks.
                 with (
                     ema.average_parameters(eval_policy_model) if ema is not None else nullcontext(),
-                    _make_eval_envs(cfg.env, cfg.eval) as eval_env,
+                    _make_eval_envs(cfg.env, cfg.eval, cfg.trust_remote_code) as eval_env,
                     torch.no_grad(),
                     accelerator.autocast(),
                 ):
