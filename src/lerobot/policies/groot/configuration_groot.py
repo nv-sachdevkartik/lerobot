@@ -135,11 +135,45 @@ def is_raw_groot_n1_7_checkpoint(model_path: str | Path | None) -> bool:
     return "type" not in config and _infer_groot_model_version_from_config(config) == GROOT_N1_7
 
 
+def resolve_groot_processor_directory(model_path: str | Path) -> Path:
+    """Locate native sidecars without copying or rewriting a checkpoint.
+
+    Native exports use either the checkpoint root or its ``processor`` directory.
+    Never combine two layouts: conflicting duplicate sidecars are ambiguous.
+    """
+    root = Path(model_path).expanduser()
+    nested = root / "processor"
+    names = ("processor_config.json", "statistics.json", "embodiment_id.json")
+    root_present = any((root / name).is_file() for name in names)
+    nested_present = any((nested / name).is_file() for name in names)
+    if root_present and nested_present:
+        for name in names:
+            first, second = root / name, nested / name
+            if first.is_file() != second.is_file() or (
+                first.is_file() and first.read_bytes() != second.read_bytes()
+            ):
+                raise ValueError(f"Conflicting GR00T processor sidecar layouts in {root}")
+    return nested if nested_present and not root_present else root
+
+
+def raw_groot_config_defaults(model_path: str | Path, embodiment: str | None = None) -> dict:
+    """Translate native metadata into LeRobot defaults, before CLI overrides."""
+    result = {"base_model_path": str(model_path)}
+    embodiment = embodiment or infer_groot_n1_7_embodiment_tag(model_path)
+    if embodiment is not None:
+        result["embodiment_tag"] = embodiment
+    horizon = infer_groot_n1_7_action_horizon(model_path, embodiment)
+    if horizon is not None:
+        result["chunk_size"] = horizon
+        result["n_action_steps"] = infer_groot_n1_7_action_execution_horizon(model_path, embodiment)
+    return result
+
+
 def infer_groot_n1_7_embodiment_tag(model_path: str | Path | None) -> str | None:
     if model_path is None:
         return None
 
-    processor_config_path = Path(model_path).expanduser() / "processor_config.json"
+    processor_config_path = resolve_groot_processor_directory(model_path) / "processor_config.json"
     processor_config = read_json(processor_config_path)
 
     modality_configs = processor_config.get("processor_kwargs", {}).get("modality_configs", {})
@@ -158,7 +192,7 @@ def infer_groot_n1_7_action_horizon(
     if model_path is None:
         return None
 
-    processor_config_path = Path(model_path).expanduser() / "processor_config.json"
+    processor_config_path = resolve_groot_processor_directory(model_path) / "processor_config.json"
     processor_config = read_json(processor_config_path)
 
     processor_kwargs = processor_config.get("processor_kwargs", {})
@@ -276,9 +310,9 @@ class GrootConfig(PreTrainedConfig):
     # Path or HuggingFace model ID for the base GR00T N1.7 model whose backbone weights and
     # checkpoint sidecars (statistics.json, processor_config.json, ...) are loaded. This is the
     # model *source*, and is intentionally distinct from the inherited `pretrained_path`:
-    # `pretrained_path` (`--policy.path`) points at a saved LeRobot checkpoint directory whose
-    # `config.json` carries a `type` field, whereas a raw NVIDIA GR00T checkpoint has no such
-    # field and so can only be loaded through `base_model_path` (`--policy.base_model_path`).
+    # `pretrained_path` (`--policy.path`) accepts saved LeRobot checkpoints and raw N1.7
+    # checkpoints. The config loader translates recognized native metadata and resolves
+    # a raw Hub checkpoint to one immutable local snapshot for weights and sidecars.
     # Defaults to GROOT_N1_7_BASE_MODEL when unset (resolved in __post_init__).
     base_model_path: str | None = None
 

@@ -84,6 +84,7 @@ from .configuration_groot import (
     N1_7_DEFAULT_IMAGE_TARGET_SIZE,
     GrootConfig,
     is_raw_groot_n1_7_checkpoint,
+    resolve_groot_processor_directory,
 )
 from .utils import (
     as_int_pair,
@@ -169,7 +170,7 @@ def _load_n1_7_checkpoint_processor_assets(config: GrootConfig) -> _GrootN17Chec
     if base_model_path is None or not is_raw_groot_n1_7_checkpoint(base_model_path):
         return None
 
-    checkpoint_path = Path(base_model_path).expanduser()
+    checkpoint_path = resolve_groot_processor_directory(base_model_path)
     processor_config = read_json(checkpoint_path / "processor_config.json")
     processor_kwargs = processor_config.get("processor_kwargs", {})
     if not isinstance(processor_kwargs, dict):
@@ -1327,11 +1328,16 @@ def _align_video_horizon(video: torch.Tensor, horizon: int | None) -> torch.Tens
     return torch.cat([pad, video], dim=1)
 
 
-def _build_n1_7_processor(model_name: str = GROOT_N1_7_BACKBONE_MODEL) -> ProcessorMixin:
+def _build_n1_7_processor(
+    model_name: str = GROOT_N1_7_BACKBONE_MODEL, model_revision: str | None = None
+) -> ProcessorMixin:
     require_package("transformers", extra="groot")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    image_processor = Qwen2VLImageProcessor.from_pretrained(model_name, trust_remote_code=True)
-    video_processor = Qwen3VLVideoProcessor.from_pretrained(model_name, trust_remote_code=True)
+    kwargs = {"trust_remote_code": True}
+    if model_revision is not None:
+        kwargs["revision"] = model_revision
+    tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+    image_processor = Qwen2VLImageProcessor.from_pretrained(model_name, **kwargs)
+    video_processor = Qwen3VLVideoProcessor.from_pretrained(model_name, **kwargs)
     proc = Qwen3VLProcessor(
         image_processor=image_processor,
         tokenizer=tokenizer,
@@ -2016,6 +2022,7 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     """
 
     model_name: str = GROOT_N1_7_BACKBONE_MODEL
+    model_revision: str | None = None
     image_crop_size: list[int] | None = None
     image_target_size: list[int] | None = None
     shortest_image_edge: int | None = None
@@ -2033,7 +2040,7 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     @property
     def proc(self) -> ProcessorMixin:
         if self._proc is None:
-            self._proc = _build_n1_7_processor(self.model_name)
+            self._proc = _build_n1_7_processor(self.model_name, self.model_revision)
         return self._proc
 
     def _target_device(self) -> torch.device | None:
@@ -2170,6 +2177,7 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     def get_config(self) -> dict[str, Any]:
         return {
             "model_name": self.model_name,
+            "model_revision": self.model_revision,
             "image_crop_size": self.image_crop_size,
             "image_target_size": self.image_target_size,
             "shortest_image_edge": self.shortest_image_edge,
@@ -2306,7 +2314,14 @@ class GrootN17ActionDecodeStep(ProcessorStep):
             return transition
 
         action_np = action.detach().cpu().float().numpy()
-        if self.use_relative_action and action_np.ndim != 3:
+        # Some native checkpoints enable relative processing globally while
+        # declaring every action group absolute. Only actual relative groups
+        # need the prediction-time state and full-chunk decoding.
+        has_relative_actions = self.use_relative_action and any(
+            isinstance(cfg, dict) and config_value(cfg.get("rep")) == "relative"
+            for cfg in action_configs[: len(action_keys)]
+        )
+        if has_relative_actions and action_np.ndim != 3:
             raise NotImplementedError(
                 "GrootN17ActionDecodeStep cannot decode native relative actions one step at a time. "
                 "Decode the full action chunk returned by predict_action_chunk while the matching "
@@ -2354,7 +2369,7 @@ class GrootN17ActionDecodeStep(ProcessorStep):
             decoded_groups[key] = _unnormalize_min_max(normalized, min_v, max_v)
             start_idx += dim
 
-        if self.use_relative_action:
+        if has_relative_actions:
             raw_state = self.pack_step.get_cached_raw_state() if self.pack_step is not None else None
             if raw_state is None:
                 raise RuntimeError(

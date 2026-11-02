@@ -132,3 +132,27 @@ def test_reward_config_from_pretrained_backfills_path():
         assert isinstance(cfg, _DummyRewardBackfillConfig)
         assert cfg.pretrained_path == tmpdir
         assert cfg.pretrained_revision is None
+
+
+def test_cli_revision_json_null_and_literal_null(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    import draccus
+
+    import lerobot.configs.policies as policies_mod
+
+    path = _write_checkpoint(str(tmp_path)) / "config.json"
+    download = Mock(return_value=str(path))
+    monkeypatch.setattr(policies_mod, "hf_hub_download", download)
+    for value in ("null", '"null"', "release", "123"):
+        with draccus.config_type("json"):
+            expected = draccus.parse(_DummyBackfillConfig, args=[f"--pretrained_revision={value}"])
+        cfg = PreTrainedConfig.from_pretrained(
+            "user/dummy_backfill", revision="old", cli_overrides=[f"--pretrained_revision={value}"]
+        )
+        assert download.call_args.kwargs["revision"] == expected.pretrained_revision
+        assert cfg.pretrained_revision == expected.pretrained_revision
+    # Programmatic revisions are already strings; do not JSON-decode them.
+    cfg = PreTrainedConfig.from_pretrained("user/dummy_backfill", revision="null")
+    assert download.call_args.kwargs["revision"] == "null"
+    assert cfg.pretrained_revision == "null"

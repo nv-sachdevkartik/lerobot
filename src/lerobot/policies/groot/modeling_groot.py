@@ -52,6 +52,7 @@ from .configuration_groot import (
     infer_groot_model_version,
     infer_groot_n1_7_action_execution_horizon,
     infer_groot_n1_7_action_horizon,
+    is_raw_groot_n1_7_checkpoint,
 )
 from .groot_n1_7 import GR00TN17, _tie_unused_qwen_lm_head
 
@@ -207,7 +208,9 @@ class GrootPolicy(PreTrainedPolicy):
         # Check if this is a fine-tuned LeRobot checkpoint (has model.safetensors)
         try:
             if os.path.isdir(model_id):
-                is_finetuned_checkpoint = os.path.exists(os.path.join(model_id, SAFETENSORS_SINGLE_FILE))
+                is_finetuned_checkpoint = not is_raw_groot_n1_7_checkpoint(model_id) and os.path.exists(
+                    os.path.join(model_id, SAFETENSORS_SINGLE_FILE)
+                )
             else:
                 # Try to download the safetensors file to check if it exists
                 try:
