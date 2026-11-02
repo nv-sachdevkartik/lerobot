@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from unittest.mock import MagicMock
 
 import gymnasium as gym
@@ -22,7 +23,10 @@ from torch import nn
 
 pytest.importorskip("datasets")
 
+from lerobot.configs.eval import EvalPipelineConfig
+from lerobot.envs.configs import AlohaEnv
 from lerobot.lerobot_types import TransitionKey
+from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.flux3 import make_flux3_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyProcessorPipeline, ProcessorStep
@@ -33,6 +37,122 @@ from lerobot.utils.constants import ACTION, OBS_STATE
 from tests.policies.flux3.helpers import task_config
 
 pytestmark = pytest.mark.dataset
+
+
+class _RuntimeOwnedEnv(AlohaEnv):
+    """An independent provider can opt in without a core name-based branch."""
+
+    def get_evaluation_runner(self):
+        return self.runner
+
+
+def _runtime_config(tmp_path, env):
+    return EvalPipelineConfig(
+        env=env,
+        policy=ACTConfig(device="cpu"),
+        output_dir=tmp_path,
+        job_name="runtime-test",
+        tf32=None,
+    )
+
+
+def _forbid_default_setup(monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Delegated evaluation must not enter default setup")
+
+    for name in ("get_safe_torch_device", "set_seed", "make_env", "make_policy", "eval_policy_all"):
+        monkeypatch.setattr(lerobot_eval, name, unexpected)
+
+
+def test_eval_main_delegates_once_with_parsed_config(tmp_path, monkeypatch):
+    _forbid_default_setup(monkeypatch)
+    env = _RuntimeOwnedEnv()
+    calls = []
+    env.runner = calls.append
+    cfg = _runtime_config(tmp_path, env)
+
+    lerobot_eval.eval_main(cfg)
+
+    assert len(calls) == 1
+    assert calls[0] is cfg
+
+
+def test_eval_main_propagates_runner_failure_without_fallback(tmp_path, monkeypatch):
+    _forbid_default_setup(monkeypatch)
+    env = _RuntimeOwnedEnv()
+    error = RuntimeError("provider setup failed")
+    env.runner = MagicMock(side_effect=error)
+
+    with pytest.raises(RuntimeError) as caught:
+        lerobot_eval.eval_main(_runtime_config(tmp_path, env))
+
+    assert caught.value is error
+    env.runner.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [("policy", "requires a policy"), ("device", "no device"), ("output", "output_dir is not set")],
+)
+def test_eval_main_validates_before_runner_selection(tmp_path, monkeypatch, field, message):
+    _forbid_default_setup(monkeypatch)
+    env = _RuntimeOwnedEnv()
+    cfg = _runtime_config(tmp_path, env)
+    select = MagicMock(side_effect=AssertionError("Runner selected before validation"))
+    monkeypatch.setattr(env, "get_evaluation_runner", select)
+    if field == "policy":
+        cfg.policy = None
+    elif field == "device":
+        cfg.policy.device = None
+    else:
+        cfg.output_dir = None
+
+    with pytest.raises(ValueError, match=message):
+        lerobot_eval.eval_main(cfg)
+
+    select.assert_not_called()
+
+
+def test_eval_main_default_runner_retains_setup_and_output(tmp_path, monkeypatch):
+    cfg = _runtime_config(tmp_path, AlohaEnv())
+    envs = {"default": {0: object()}}
+    policy = MagicMock()
+    policy.config = cfg.policy
+    info = {"overall": {"pc_success_ci95": [0.0, 100.0], "pc_success": 0.0, "n_success": 0, "n_episodes": 1}}
+    device = MagicMock(return_value=torch.device("cpu"))
+    seed = MagicMock()
+    make_env = MagicMock(return_value=envs)
+    make_policy = MagicMock(return_value=policy)
+    evaluate = MagicMock(return_value=info)
+    close = MagicMock()
+    monkeypatch.setattr(lerobot_eval, "get_safe_torch_device", device)
+    monkeypatch.setattr(lerobot_eval, "set_seed", seed)
+    monkeypatch.setattr(lerobot_eval, "make_env", make_env)
+    monkeypatch.setattr(lerobot_eval, "make_policy", make_policy)
+    monkeypatch.setattr(lerobot_eval, "make_pre_post_processors", lambda **kwargs: ("pre", "post"))
+    monkeypatch.setattr(
+        lerobot_eval, "make_env_pre_post_processors", lambda **kwargs: ("env_pre", "env_post")
+    )
+    monkeypatch.setattr(lerobot_eval, "eval_policy_all", evaluate)
+    monkeypatch.setattr(lerobot_eval, "close_envs", close)
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", False)
+
+    lerobot_eval.eval_main(cfg)
+
+    device.assert_called_once_with("cpu", log=True)
+    seed.assert_called_once_with(cfg.seed)
+    make_env.assert_called_once_with(
+        cfg.env,
+        n_envs=cfg.eval.batch_size,
+        use_async_envs=cfg.eval.use_async_envs,
+        trust_remote_code=cfg.trust_remote_code,
+    )
+    make_policy.assert_called_once_with(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
+    assert evaluate.call_count == 1
+    assert evaluate.call_args.kwargs["start_seed"] == cfg.seed
+    assert evaluate.call_args.kwargs["preprocessor"] == "pre"
+    close.assert_called_once_with(envs)
+    assert json.loads((tmp_path / "eval_info.json").read_text()) == info
 
 
 class _TwoStepEnv(gym.Env):

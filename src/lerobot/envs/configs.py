@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import abc
 import importlib
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import draccus
 import gymnasium as gym
@@ -44,6 +45,9 @@ from lerobot.utils.constants import (
     OBS_IMAGES,
     OBS_STATE,
 )
+
+if TYPE_CHECKING:
+    from lerobot.configs.eval import EvalPipelineConfig
 
 
 def _make_vec_env_cls(use_async: bool, n_envs: int):
@@ -127,6 +131,17 @@ class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
     def get_env_processors(self):
         """Return (preprocessor, postprocessor) for this env. Default: identity."""
         return PolicyProcessorPipeline(steps=[]), PolicyProcessorPipeline(steps=[])
+
+    def get_evaluation_runner(self) -> Callable[[EvalPipelineConfig], Any] | None:
+        """Optionally provide setup and teardown for the standard evaluation command.
+
+        The runner receives the already parsed pipeline config before ordinary
+        device, seed, environment, or policy setup. It owns its resources and
+        result output, and can reuse LeRobot's policy factories and evaluation
+        functions. Errors propagate without falling back to the default runner.
+        Returning None preserves the standard evaluation path.
+        """
+        return None
 
 
 @dataclass

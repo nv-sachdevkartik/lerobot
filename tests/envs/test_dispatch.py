@@ -54,6 +54,10 @@ def test_identity_processors():
     assert len(pre.steps) == 0 and len(post.steps) == 0
 
 
+def test_default_evaluation_runner():
+    assert make_env_config("aloha").get_evaluation_runner() is None
+
+
 def test_delegation():
     """make_env() should call cfg.create_envs(), not use if/elif dispatch."""
     sentinel = {"delegated": {0: "marker"}}

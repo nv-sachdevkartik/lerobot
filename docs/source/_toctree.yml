@@ -141,6 +141,8 @@
     title: RoboMME
   - local: envhub_isaaclab_arena
     title: NVIDIA IsaacLab Arena Environments
+  - local: integrate_dexbench
+    title: RLWRLD DexBench
   - local: vlabench
     title: VLABench
   title: "Benchmarks"

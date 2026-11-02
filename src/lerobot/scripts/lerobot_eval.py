@@ -790,6 +790,11 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         # EvalPipelineConfig.__post_init__ always assigns a default output_dir.
         raise ValueError("EvalPipelineConfig.output_dir is not set.")
 
+    runner = cfg.env.get_evaluation_runner()
+    if runner is not None:
+        runner(cfg)
+        return
+
     # Check device is available
     device = get_safe_torch_device(cfg.policy.device, log=True)
 
