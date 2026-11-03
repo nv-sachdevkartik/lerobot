@@ -845,7 +845,10 @@ def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
                 step.rename_map = dict(cfg.rename_map)
                 break
         else:
-            preprocessor.steps.insert(0, RenameObservationsProcessorStep(rename_map=dict(cfg.rename_map)))
+            preprocessor.steps = [
+                RenameObservationsProcessorStep(rename_map=dict(cfg.rename_map)),
+                *preprocessor.steps,
+            ]
 
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)

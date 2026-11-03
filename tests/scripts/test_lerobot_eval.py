@@ -178,8 +178,9 @@ def test_standard_evaluation_lifetime(tmp_path, monkeypatch, provider, failure):
     assert events[-1] == ("stop" if provider else "close")
 
 
+@pytest.mark.parametrize("step_sequence", [list, tuple], ids=["list", "tuple"])
 @pytest.mark.parametrize("mode", ["existing", "missing", "empty", "saved"])
-def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatch, mode):
+def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatch, mode, step_sequence):
     from lerobot.policies.groot.processor_groot import GrootN17PackInputsStep
 
     cfg = _runtime_config(tmp_path, AlohaEnv())
@@ -196,7 +197,7 @@ def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatc
     pack = GrootN17PackInputsStep(video_modality_keys=["left", "right"], normalize_min_max=False)
     rename = RenameObservationsProcessorStep(rename_map={"kept": "saved"} if mode == "saved" else {})
     steps = [pack] if mode == "missing" else [rename, pack]
-    pre = PolicyProcessorPipeline(steps=steps)
+    pre = PolicyProcessorPipeline(steps=step_sequence(steps))
     policy = MagicMock(config=cfg.policy)
     monkeypatch.setattr(lerobot_eval, "make_env", lambda *args, **kwargs: {})
     monkeypatch.setattr(lerobot_eval, "close_envs", lambda *args: None)
