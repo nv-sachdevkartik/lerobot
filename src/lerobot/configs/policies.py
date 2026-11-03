@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import abc
-import argparse
 import builtins
 import json
 import os
@@ -24,8 +23,7 @@ from typing import Any, TypeVar
 
 import draccus
 import torch
-from draccus.cfgparsing import parse_string
-from huggingface_hub import constants as hub_constants, hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import CONFIG_NAME
 from huggingface_hub.errors import HfHubHTTPError
 
@@ -190,21 +188,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
         revision: str | None = None,
         **policy_kwargs: Any,
     ) -> T:
-        cli_overrides = policy_kwargs.pop("cli_overrides", [])
-        # Resolve the standard CLI revision before fetching config.json, rather
-        # than applying it only after a potentially different revision was read.
-        revision_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-        revision_parser.add_argument("--pretrained_revision", default=argparse.SUPPRESS)
-        revision_parser.add_argument("--embodiment_tag")
-        source_options = revision_parser.parse_known_args(cli_overrides)[0]
-        if hasattr(source_options, "pretrained_revision"):
-            # Match the JSON/Optional[str] decoding used by the full config
-            # parser: null means None, while a quoted "null" names a revision.
-            with draccus.config_type("json"):
-                revision = draccus.decode(str | None, parse_string(source_options.pretrained_revision))
         model_id = str(pretrained_name_or_path)
-        if Path(model_id).expanduser().is_dir():
-            model_id = str(Path(model_id).expanduser())
         config_file: str | None = None
         if Path(model_id).is_dir():
             if CONFIG_NAME in os.listdir(model_id):
@@ -239,46 +223,8 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
         # the config (with CLI overrides) directly for that class. The "type" key is
         # stripped because draccus only consumes it when parsing the registry base class.
         policy_type = config.pop("type", None)
-        raw_groot = False
         if policy_type is None:
-            from lerobot.policies.groot.configuration_groot import (
-                GROOT_N1_7,
-                _infer_groot_model_version_from_config,
-                raw_groot_config_defaults,
-            )
-
-            # A shared Cosmos backbone name alone is not a GR00T architecture
-            # declaration. Only explicit native version/type/architecture tags
-            # may opt an otherwise untyped config into this loader.
-            native_identity = {key: value for key, value in config.items() if key != "model_name"}
-            if _infer_groot_model_version_from_config(native_identity) != GROOT_N1_7:
-                raise ValueError(f"Missing 'type' field in {CONFIG_NAME} of {model_id}")
-            if not Path(model_id).is_dir():
-                # hf_hub_download returns a snapshot path, whose directory is
-                # the immutable commit. Use that same commit for all weights
-                # and sidecars, even if the requested revision was a branch.
-                snapshot = Path(config_file).parent
-                commit = snapshot.name
-                if (
-                    snapshot.parent.name != "snapshots"
-                    or len(commit) != 40
-                    or any(char not in "0123456789abcdef" for char in commit)
-                ):
-                    raise ValueError(f"Cannot determine immutable Hub snapshot from {config_file}")
-                model_id = snapshot_download(
-                    repo_id=model_id,
-                    revision=commit,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    token=token,
-                    local_files_only=local_files_only or hub_constants.HF_HUB_OFFLINE,
-                    **({"proxies": proxies} if proxies is not None else {}),
-                )
-                revision = commit
-            model_id = str(Path(model_id).expanduser().resolve())
-            config = raw_groot_config_defaults(model_id, source_options.embodiment_tag)
-            policy_type = "groot"
-            raw_groot = True
+            raise ValueError(f"Missing 'type' field in {CONFIG_NAME} of {model_id}")
         try:
             config_cls = cls.get_choice_class(policy_type)
         except Exception as e:
@@ -291,10 +237,9 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
             json.dump(config, f)
             config_file = f.name
 
+        cli_overrides = policy_kwargs.pop("cli_overrides", [])
         with draccus.config_type("json"):
             config = draccus.parse(config_cls, config_file, args=cli_overrides)
-        if raw_groot and Path(config.base_model_path).expanduser().resolve() != Path(model_id):
-            raise ValueError("A raw --policy.path cannot be combined with a different base_model_path")
 
         # The serialized config.json does not carry the source path, so parsing
         # yields pretrained_path=None. Backfill it: downstream code (e.g.

@@ -11,7 +11,7 @@ import torch
 from gymnasium.envs.registration import register, registry as gym_registry
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.envs.configs import EnvConfig, IsaaclabArenaEnv, LiberoEnv, LiberoPlusEnv
+from lerobot.envs.configs import EnvConfig, HubEnvConfig, IsaaclabArenaEnv, LiberoEnv, LiberoPlusEnv
 from lerobot.envs.factory import make_env, make_env_config, make_env_pre_post_processors
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 from lerobot.processor import IsaaclabArenaProcessorStep, LiberoProcessorStep
@@ -54,8 +54,9 @@ def test_identity_processors():
     assert len(pre.steps) == 0 and len(post.steps) == 0
 
 
-def test_default_evaluation_runner():
-    assert make_env_config("aloha").get_evaluation_runner() is None
+def test_default_evaluation_context(tmp_path):
+    with make_env_config("aloha").evaluation_context(tmp_path) as resources:
+        assert resources is None
 
 
 def test_delegation():
@@ -71,6 +72,40 @@ def test_delegation():
     )()
     result = make_env(fake, n_envs=1)
     assert result is sentinel
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("consent", [False, True])
+def test_provider_receives_explicit_consent(monkeypatch, remote, consent):
+    from lerobot.envs import factory
+
+    cfg = HubEnvConfig(hub_path="owner/env" if remote else None, trust_remote_code=not consent)
+    sentinel = {"suite": {0: object()}}
+
+    def provider(*args, **kwargs):
+        assert cfg.trust_remote_code is consent
+        return sentinel
+
+    if remote:
+
+        def download(hub_path, trust, cache):
+            assert trust is consent
+            if not trust:
+                raise RuntimeError("explicit consent required")
+            return "owner/env", "env.py", "/unused/env.py", "revision"
+
+        monkeypatch.setattr(factory, "_download_hub_file", download)
+        monkeypatch.setattr(factory, "_import_hub_module", lambda *args: object())
+        monkeypatch.setattr(factory, "_call_make_env", provider)
+        monkeypatch.setattr(factory, "_normalize_hub_result", lambda value: value)
+    else:
+        monkeypatch.setattr(cfg, "create_envs", provider)
+    if remote and not consent:
+        with pytest.raises(RuntimeError, match="explicit consent required"):
+            make_env(cfg, trust_remote_code=consent)
+        assert cfg.trust_remote_code is False
+    else:
+        assert make_env(cfg, trust_remote_code=consent) is sentinel
 
 
 def test_processors_delegation():

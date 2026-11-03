@@ -53,10 +53,7 @@ class EvalPipelineConfig:
             self.policy = PreTrainedConfig.from_pretrained(
                 policy_path, cli_overrides=yaml_overrides + cli_overrides
             )
-            # The loader may resolve a native Hub checkpoint to one immutable
-            # local snapshot shared by its weights and processor sidecars.
-            if self.policy.pretrained_path is None:
-                self.policy.pretrained_path = Path(policy_path)
+            self.policy.pretrained_path = Path(policy_path)
 
         else:
             logger.warning(

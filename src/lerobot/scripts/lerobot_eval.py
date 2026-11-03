@@ -56,7 +56,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from copy import deepcopy
 from dataclasses import asdict
 from functools import partial
@@ -87,6 +87,7 @@ from lerobot.lerobot_types import PolicyAction
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
 from lerobot.processor import (
     PolicyProcessorPipeline,
+    RenameObservationsProcessorStep,
     bind_relative_anchor,
     policy_output_to_transition,
     transition_to_policy_action,
@@ -790,11 +791,12 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         # EvalPipelineConfig.__post_init__ always assigns a default output_dir.
         raise ValueError("EvalPipelineConfig.output_dir is not set.")
 
-    runner = cfg.env.get_evaluation_runner()
-    if runner is not None:
-        runner(cfg)
-        return
+    with ExitStack() as stack:
+        stack.enter_context(cfg.env.evaluation_context(cfg.output_dir))
+        _eval_main(cfg, stack)
 
+
+def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
     # Check device is available
     device = get_safe_torch_device(cfg.policy.device, log=True)
 
@@ -814,6 +816,7 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         trust_remote_code=cfg.trust_remote_code,
     )
 
+    stack.callback(close_envs, envs)
     logging.info("Making policy.")
 
     policy = make_policy(
@@ -835,6 +838,14 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         pretrained_path=cfg.policy.pretrained_path,
         preprocessor_overrides=preprocessor_overrides,
     )
+    if cfg.policy.pretrained_path is None and cfg.rename_map:
+        # Fresh processor factories do not consume saved-pipeline overrides.
+        for step in preprocessor.steps:
+            if isinstance(step, RenameObservationsProcessorStep):
+                step.rename_map = dict(cfg.rename_map)
+                break
+        else:
+            preprocessor.steps.insert(0, RenameObservationsProcessorStep(rename_map=dict(cfg.rename_map)))
 
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
@@ -878,10 +889,8 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         for task_group, task_group_info in info.items():
             logger.info(f"\nAggregated Metrics for {task_group}:")
             logger.info(task_group_info)
-    # Close all vec envs
-    close_envs(envs)
-
-    # Save info
+    # Save results before closing resources that may terminate the simulator process.
+    Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
     with open(Path(cfg.output_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 

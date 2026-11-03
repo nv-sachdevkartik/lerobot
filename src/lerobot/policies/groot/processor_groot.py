@@ -1328,16 +1328,11 @@ def _align_video_horizon(video: torch.Tensor, horizon: int | None) -> torch.Tens
     return torch.cat([pad, video], dim=1)
 
 
-def _build_n1_7_processor(
-    model_name: str = GROOT_N1_7_BACKBONE_MODEL, model_revision: str | None = None
-) -> ProcessorMixin:
+def _build_n1_7_processor(model_name: str = GROOT_N1_7_BACKBONE_MODEL) -> ProcessorMixin:
     require_package("transformers", extra="groot")
-    kwargs = {"trust_remote_code": True}
-    if model_revision is not None:
-        kwargs["revision"] = model_revision
-    tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
-    image_processor = Qwen2VLImageProcessor.from_pretrained(model_name, **kwargs)
-    video_processor = Qwen3VLVideoProcessor.from_pretrained(model_name, **kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    image_processor = Qwen2VLImageProcessor.from_pretrained(model_name, trust_remote_code=True)
+    video_processor = Qwen3VLVideoProcessor.from_pretrained(model_name, trust_remote_code=True)
     proc = Qwen3VLProcessor(
         image_processor=image_processor,
         tokenizer=tokenizer,
@@ -2022,7 +2017,6 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     """
 
     model_name: str = GROOT_N1_7_BACKBONE_MODEL
-    model_revision: str | None = None
     image_crop_size: list[int] | None = None
     image_target_size: list[int] | None = None
     shortest_image_edge: int | None = None
@@ -2040,7 +2034,7 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     @property
     def proc(self) -> ProcessorMixin:
         if self._proc is None:
-            self._proc = _build_n1_7_processor(self.model_name, self.model_revision)
+            self._proc = _build_n1_7_processor(self.model_name)
         return self._proc
 
     def _target_device(self) -> torch.device | None:
@@ -2177,7 +2171,6 @@ class GrootN17VLMEncodeStep(ProcessorStep):
     def get_config(self) -> dict[str, Any]:
         return {
             "model_name": self.model_name,
-            "model_revision": self.model_revision,
             "image_crop_size": self.image_crop_size,
             "image_target_size": self.image_target_size,
             "shortest_image_edge": self.shortest_image_edge,

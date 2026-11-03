@@ -91,6 +91,7 @@ def make_env(
     if isinstance(cfg, str):
         hub_path: str | None = cfg
     elif isinstance(cfg, HubEnvConfig):
+        cfg.trust_remote_code = trust_remote_code
         hub_path = cfg.hub_path
     else:
         hub_path = None

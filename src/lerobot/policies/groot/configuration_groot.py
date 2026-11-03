@@ -156,19 +156,6 @@ def resolve_groot_processor_directory(model_path: str | Path) -> Path:
     return nested if nested_present and not root_present else root
 
 
-def raw_groot_config_defaults(model_path: str | Path, embodiment: str | None = None) -> dict:
-    """Translate native metadata into LeRobot defaults, before CLI overrides."""
-    result = {"base_model_path": str(model_path)}
-    embodiment = embodiment or infer_groot_n1_7_embodiment_tag(model_path)
-    if embodiment is not None:
-        result["embodiment_tag"] = embodiment
-    horizon = infer_groot_n1_7_action_horizon(model_path, embodiment)
-    if horizon is not None:
-        result["chunk_size"] = horizon
-        result["n_action_steps"] = infer_groot_n1_7_action_execution_horizon(model_path, embodiment)
-    return result
-
-
 def infer_groot_n1_7_embodiment_tag(model_path: str | Path | None) -> str | None:
     if model_path is None:
         return None
@@ -310,9 +297,9 @@ class GrootConfig(PreTrainedConfig):
     # Path or HuggingFace model ID for the base GR00T N1.7 model whose backbone weights and
     # checkpoint sidecars (statistics.json, processor_config.json, ...) are loaded. This is the
     # model *source*, and is intentionally distinct from the inherited `pretrained_path`:
-    # `pretrained_path` (`--policy.path`) accepts saved LeRobot checkpoints and raw N1.7
-    # checkpoints. The config loader translates recognized native metadata and resolves
-    # a raw Hub checkpoint to one immutable local snapshot for weights and sidecars.
+    # `pretrained_path` (`--policy.path`) points at a saved LeRobot checkpoint directory whose
+    # `config.json` carries a `type` field, whereas a raw NVIDIA GR00T checkpoint has no such
+    # field and so can only be loaded through `base_model_path` (`--policy.base_model_path`).
     # Defaults to GROOT_N1_7_BASE_MODEL when unset (resolved in __post_init__).
     base_model_path: str | None = None
 
