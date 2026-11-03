@@ -797,6 +797,10 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
 
 
 def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
+    assert cfg.policy is not None
+    assert cfg.policy.device is not None
+    assert cfg.output_dir is not None
+
     # Check device is available
     device = get_safe_torch_device(cfg.policy.device, log=True)
 
