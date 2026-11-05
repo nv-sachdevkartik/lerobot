@@ -135,11 +135,32 @@ def is_raw_groot_n1_7_checkpoint(model_path: str | Path | None) -> bool:
     return "type" not in config and _infer_groot_model_version_from_config(config) == GROOT_N1_7
 
 
+def resolve_groot_processor_directory(model_path: str | Path) -> Path:
+    """Locate native processor sidecars without copying or rewriting a checkpoint.
+
+    Native exports use either the checkpoint root or its ``processor`` directory.
+    Reject conflicting duplicate layouts instead of combining their metadata.
+    """
+    root = Path(model_path).expanduser()
+    nested = root / "processor"
+    names = ("processor_config.json", "statistics.json", "embodiment_id.json")
+    root_present = any((root / name).is_file() for name in names)
+    nested_present = any((nested / name).is_file() for name in names)
+    if root_present and nested_present:
+        for name in names:
+            first, second = root / name, nested / name
+            if first.is_file() != second.is_file() or (
+                first.is_file() and first.read_bytes() != second.read_bytes()
+            ):
+                raise ValueError(f"Conflicting GR00T processor sidecar layouts in {root}")
+    return nested if nested_present and not root_present else root
+
+
 def infer_groot_n1_7_embodiment_tag(model_path: str | Path | None) -> str | None:
     if model_path is None:
         return None
 
-    processor_config_path = Path(model_path).expanduser() / "processor_config.json"
+    processor_config_path = resolve_groot_processor_directory(model_path) / "processor_config.json"
     processor_config = read_json(processor_config_path)
 
     modality_configs = processor_config.get("processor_kwargs", {}).get("modality_configs", {})
@@ -158,7 +179,7 @@ def infer_groot_n1_7_action_horizon(
     if model_path is None:
         return None
 
-    processor_config_path = Path(model_path).expanduser() / "processor_config.json"
+    processor_config_path = resolve_groot_processor_directory(model_path) / "processor_config.json"
     processor_config = read_json(processor_config_path)
 
     processor_kwargs = processor_config.get("processor_kwargs", {})

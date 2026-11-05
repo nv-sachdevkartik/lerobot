@@ -574,12 +574,27 @@ def test_groot_from_pretrained_infers_n1_7_from_ambiguous_local_config(tmp_path,
     assert policy.config.base_model_path == str(model_path)
 
 
-def test_raw_n1_7_libero_checkpoint_processors_use_checkpoint_assets(tmp_path):
+@pytest.mark.parametrize("layout", ["root", "nested", "identical_duplicates"])
+@pytest.mark.parametrize("pretrained_processors", [False, True])
+def test_raw_n1_7_libero_checkpoint_processors_use_checkpoint_assets(tmp_path, layout, pretrained_processors):
     model_path = tmp_path / "libero_spatial"
     _write_raw_n1_7_libero_checkpoint(model_path)
+    if layout != "root":
+        (model_path / "processor").mkdir()
+        for name in ("processor_config.json", "statistics.json", "embodiment_id.json"):
+            source = model_path / name
+            (model_path / "processor" / name).write_bytes(source.read_bytes())
+            if layout == "nested":
+                source.unlink()
+    before = {str(path): path.read_bytes() for path in model_path.rglob("*.json")}
+    assert infer_groot_n1_7_action_horizon(model_path) == 16
+    assert infer_groot_n1_7_action_execution_horizon(model_path) == 8
     config = _raw_n1_7_libero_config(model_path)
 
-    preprocessor, postprocessor = make_pre_post_processors(config, pretrained_path=str(model_path))
+    preprocessor, postprocessor = make_pre_post_processors(
+        config, pretrained_path=str(model_path) if pretrained_processors else None
+    )
+    assert before == {str(path): path.read_bytes() for path in model_path.rglob("*.json")}
 
     pack_inputs = next(step for step in preprocessor.steps if isinstance(step, GrootN17PackInputsStep))
     vlm_encode = next(step for step in preprocessor.steps if isinstance(step, GrootN17VLMEncodeStep))
@@ -617,6 +632,26 @@ def test_raw_n1_7_libero_checkpoint_processors_use_checkpoint_assets(tmp_path):
     assert decode_actions.use_percentiles is True
     assert decode_actions.use_relative_action is True
     assert decode_actions.action_decode_transform == GROOT_ACTION_DECODE_TRANSFORM_LIBERO
+
+
+@pytest.mark.parametrize("conflict", ["different_content", "missing_root", "missing_nested"])
+def test_native_processor_layout_rejects_ambiguous_sidecars(tmp_path, conflict):
+    model_path = tmp_path / "native"
+    _write_raw_n1_7_libero_checkpoint(model_path)
+    nested = model_path / "processor"
+    nested.mkdir()
+    for name in ("processor_config.json", "statistics.json", "embodiment_id.json"):
+        (nested / name).write_bytes((model_path / name).read_bytes())
+    if conflict == "different_content":
+        (nested / "statistics.json").write_text("{}")
+    elif conflict == "missing_root":
+        (model_path / "statistics.json").unlink()
+    else:
+        (nested / "statistics.json").unlink()
+    with pytest.raises(ValueError, match="Conflicting GR00T processor sidecar layouts"):
+        from lerobot.policies.groot.configuration_groot import resolve_groot_processor_directory
+
+        resolve_groot_processor_directory(model_path)
 
 
 def test_raw_n1_7_checkpoint_requires_percentile_stats_when_config_uses_percentiles(tmp_path):

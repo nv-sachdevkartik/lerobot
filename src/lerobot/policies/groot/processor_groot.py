@@ -84,6 +84,7 @@ from .configuration_groot import (
     N1_7_DEFAULT_IMAGE_TARGET_SIZE,
     GrootConfig,
     is_raw_groot_n1_7_checkpoint,
+    resolve_groot_processor_directory,
 )
 from .utils import (
     as_int_pair,
@@ -169,7 +170,7 @@ def _load_n1_7_checkpoint_processor_assets(config: GrootConfig) -> _GrootN17Chec
     if base_model_path is None or not is_raw_groot_n1_7_checkpoint(base_model_path):
         return None
 
-    checkpoint_path = Path(base_model_path).expanduser()
+    checkpoint_path = resolve_groot_processor_directory(base_model_path)
     processor_config = read_json(checkpoint_path / "processor_config.json")
     processor_kwargs = processor_config.get("processor_kwargs", {})
     if not isinstance(processor_kwargs, dict):
