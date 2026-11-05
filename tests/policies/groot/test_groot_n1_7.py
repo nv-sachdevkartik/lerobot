@@ -3208,3 +3208,18 @@ def test_groot_n1_7_action_decode_keeps_at_least_fp32_precision(action_dtype, ex
     assert output.dtype == expected_dtype
     expected = (transition[TransitionKey.ACTION].float() + 1.0) / 2.0
     torch.testing.assert_close(output.float(), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("use_relative_action", [False, True])
+def test_groot_n1_7_action_decode_absolute_groups_allow_stepwise_without_cached_state(use_relative_action):
+    step = GrootN17ActionDecodeStep(
+        env_action_dim=1,
+        raw_stats={"action": {"joint": {"min": [2.0], "max": [6.0]}}},
+        modality_config={"action": {"modality_keys": ["joint"], "action_configs": [{"rep": "ABSOLUTE"}]}},
+        use_relative_action=use_relative_action,
+    )
+    action = torch.tensor([[0.5]])
+    selected = step({TransitionKey.ACTION: action})[TransitionKey.ACTION]
+    chunk = step({TransitionKey.ACTION: action[:, None]})[TransitionKey.ACTION]
+    torch.testing.assert_close(selected, torch.tensor([[5.0]]))
+    torch.testing.assert_close(selected, chunk[:, 0])

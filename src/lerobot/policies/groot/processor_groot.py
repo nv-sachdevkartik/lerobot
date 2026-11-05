@@ -2307,7 +2307,13 @@ class GrootN17ActionDecodeStep(ProcessorStep):
             return transition
 
         action_np = action.detach().cpu().float().numpy()
-        if self.use_relative_action and action_np.ndim != 3:
+        # A global relative flag can coexist with exclusively absolute selected groups.
+        # Only an actual relative group needs prediction-time state and full-chunk decoding.
+        has_relative_actions = self.use_relative_action and any(
+            isinstance(cfg, dict) and config_value(cfg.get("rep")) == "relative"
+            for cfg in action_configs[: len(action_keys)]
+        )
+        if has_relative_actions and action_np.ndim != 3:
             raise NotImplementedError(
                 "GrootN17ActionDecodeStep cannot decode native relative actions one step at a time. "
                 "Decode the full action chunk returned by predict_action_chunk while the matching "
@@ -2355,7 +2361,7 @@ class GrootN17ActionDecodeStep(ProcessorStep):
             decoded_groups[key] = _unnormalize_min_max(normalized, min_v, max_v)
             start_idx += dim
 
-        if self.use_relative_action:
+        if has_relative_actions:
             raw_state = self.pack_step.get_cached_raw_state() if self.pack_step is not None else None
             if raw_state is None:
                 raise RuntimeError(
