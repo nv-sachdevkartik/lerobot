@@ -2402,8 +2402,12 @@ class GrootN17ActionDecodeStep(ProcessorStep):
         if squeeze_horizon:
             decoded = decoded[:, 0]
         new_transition = transition.copy()
+        # Physical targets must retain at least FP32 precision after unnormalization.
+        decoded_dtype = (
+            torch.promote_types(action.dtype, torch.float32) if action.is_floating_point() else action.dtype
+        )
         new_transition[TransitionKey.ACTION] = torch.as_tensor(
-            decoded, dtype=action.dtype, device=action.device
+            decoded, dtype=decoded_dtype, device=action.device
         )
         return new_transition
 

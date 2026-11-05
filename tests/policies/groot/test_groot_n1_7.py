@@ -3175,3 +3175,36 @@ def test_gr00t_n1_7_model_forward_with_mocked_backbone():
     inference_inputs = {key: value for key, value in inputs.items() if key != "action"}
     action_output = model.get_action(inference_inputs)
     assert action_output["action_pred"].shape == (2, config.action_horizon, config.max_action_dim)
+
+
+@pytest.mark.parametrize(
+    ("action_dtype", "expected_dtype"),
+    [
+        (torch.bfloat16, torch.float32),
+        (torch.float16, torch.float32),
+        (torch.float32, torch.float32),
+        (torch.float64, torch.float64),
+    ],
+)
+def test_groot_n1_7_action_decode_keeps_at_least_fp32_precision(action_dtype, expected_dtype):
+    """Decoded actions are physical targets: a reduced-precision compute dtype must not quantize them."""
+    unit_stats = {
+        "min": [0.0],
+        "max": [1.0],
+        "mean": [0.5],
+        "std": [1.0],
+        "q01": [0.0],
+        "q99": [1.0],
+    }
+    step = GrootN17ActionDecodeStep(
+        env_action_dim=1,
+        raw_stats={"action": {"x": unit_stats}},
+        modality_config={"action": {"modality_keys": ["x"], "action_configs": [{}]}},
+    )
+    transition = {TransitionKey.ACTION: torch.tensor([[[0.123456789]]], dtype=action_dtype)}
+
+    output = step(transition)[TransitionKey.ACTION]
+
+    assert output.dtype == expected_dtype
+    expected = (transition[TransitionKey.ACTION].float() + 1.0) / 2.0
+    torch.testing.assert_close(output.float(), expected, rtol=0, atol=0)
