@@ -14,6 +14,7 @@
 
 import json
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import gymnasium as gym
@@ -28,6 +29,7 @@ from lerobot.configs.eval import EvalPipelineConfig
 from lerobot.envs.configs import AlohaEnvConfig
 from lerobot.lerobot_types import TransitionKey
 from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.flux3 import make_flux3_pre_post_processors
 from lerobot.processor import PolicyProcessorPipeline, ProcessorStep
 from lerobot.processor.factory import make_policy_processor_pipelines
@@ -336,3 +338,22 @@ def test_standard_evaluation_lifetime(tmp_path, monkeypatch, provider, failure):
     close.assert_called_once_with(envs)
     assert json.loads((output_dir / "eval_info.json").read_text()) == info
     assert events[-1] == ("stop" if provider else "close")
+
+
+def test_eval_metrics_exclude_steps_after_first_done(monkeypatch):
+    policy = MagicMock(spec=PreTrainedPolicy)
+    policy.config = SimpleNamespace(save_predicted_video=False)
+    policy.training = False
+    data = {
+        "done": torch.tensor([[True, True, True], [False, True, True]]),
+        "reward": torch.tensor([[-3.0, 99.0, 99.0], [-4.0, -2.0, 99.0]]),
+        "success": torch.tensor([[False, True, True], [False, True, False]]),
+    }
+    monkeypatch.setattr(lerobot_eval, "rollout", lambda **kwargs: data)
+    result = lerobot_eval.eval_policy(SimpleNamespace(num_envs=2), policy, None, None, None, None, 2)
+    assert result["per_episode"][0]["sum_reward"] == -3.0
+    assert result["per_episode"][0]["max_reward"] == -3.0
+    assert result["per_episode"][0]["success"] is False
+    assert result["per_episode"][1]["sum_reward"] == -6.0
+    assert result["per_episode"][1]["max_reward"] == -2.0
+    assert result["per_episode"][1]["success"] is True
