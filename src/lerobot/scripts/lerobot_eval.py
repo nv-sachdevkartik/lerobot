@@ -87,6 +87,7 @@ from lerobot.lerobot_types import PolicyAction
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
 from lerobot.processor import (
     PolicyProcessorPipeline,
+    RenameObservationsProcessorStep,
     bind_relative_anchor,
     policy_output_to_transition,
     transition_to_policy_action,
@@ -893,6 +894,18 @@ def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
         pretrained_revision=cfg.policy.pretrained_revision,
         preprocessor_overrides=preprocessor_overrides,
     )
+
+    if cfg.policy.pretrained_path is None and cfg.rename_map:
+        # Fresh processor factories do not consume saved-pipeline overrides.
+        for step in preprocessor.steps:
+            if isinstance(step, RenameObservationsProcessorStep):
+                step.rename_map = dict(cfg.rename_map)
+                break
+        else:
+            preprocessor.steps = [
+                RenameObservationsProcessorStep(rename_map=dict(cfg.rename_map)),
+                *preprocessor.steps,
+            ]
 
     recording_dir = Path(cfg.output_dir) / "recordings" if cfg.eval.recording else None
     max_episodes_rendered = 0 if cfg.eval.recording else 10

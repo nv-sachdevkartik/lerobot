@@ -31,7 +31,7 @@ from lerobot.lerobot_types import TransitionKey
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.flux3 import make_flux3_pre_post_processors
-from lerobot.processor import PolicyProcessorPipeline, ProcessorStep
+from lerobot.processor import PolicyProcessorPipeline, ProcessorStep, RenameObservationsProcessorStep
 from lerobot.processor.factory import make_policy_processor_pipelines
 from lerobot.scripts import lerobot_eval
 from lerobot.scripts.lerobot_eval import rollout
@@ -357,3 +357,58 @@ def test_eval_metrics_exclude_steps_after_first_done(monkeypatch):
     assert result["per_episode"][1]["sum_reward"] == -6.0
     assert result["per_episode"][1]["max_reward"] == -2.0
     assert result["per_episode"][1]["success"] is True
+
+
+@pytest.mark.parametrize("step_sequence", [list, tuple], ids=["list", "tuple"])
+@pytest.mark.parametrize("mode", ["existing", "missing", "empty", "saved"])
+def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatch, mode, step_sequence):
+    from lerobot.policies.groot.processor_groot import GrootN17PackInputsStep
+
+    cfg = _runtime_config(tmp_path, AlohaEnvConfig())
+    cfg.rename_map = {
+        "observation.images.z": "observation.images.left",
+        "observation.images.a": "observation.images.right",
+    }
+    if mode == "empty":
+        cfg.rename_map = {}
+    elif mode == "saved":
+        cfg.policy.pretrained_path = tmp_path / "saved-policy"
+
+    # The explicit camera mapping deliberately opposes alphabetical source order.
+    pack = GrootN17PackInputsStep(video_modality_keys=["left", "right"], normalize_min_max=False)
+    rename = RenameObservationsProcessorStep(rename_map={"kept": "saved"} if mode == "saved" else {})
+    steps = [pack] if mode == "missing" else [rename, pack]
+    pre = PolicyProcessorPipeline(steps=step_sequence(steps))
+    policy = MagicMock(config=cfg.policy)
+    monkeypatch.setattr(lerobot_eval, "make_env", lambda *args, **kwargs: {"default": {0: object()}})
+    monkeypatch.setattr(lerobot_eval, "close_envs", lambda *args: None)
+    monkeypatch.setattr(lerobot_eval, "make_policy", lambda **kwargs: policy)
+    monkeypatch.setattr(lerobot_eval, "make_pre_post_processors", lambda **kwargs: (pre, None))
+    monkeypatch.setattr(lerobot_eval, "make_env_pre_post_processors", lambda **kwargs: (None, None))
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", False)
+
+    def evaluate(**kwargs):
+        assert kwargs["preprocessor"] is pre
+        assert pre.steps[-1] is pack
+        if mode != "missing":
+            assert pre.steps[0] is rename
+        if mode == "saved":
+            assert rename.rename_map == {"kept": "saved"}
+        elif mode == "empty":
+            assert rename.rename_map == {}
+        else:
+            assert pre.steps[0].rename_map == cfg.rename_map
+            assert pre.steps[0].rename_map is not cfg.rename_map
+        batch = {
+            "observation.images.z": torch.full((1, 3, 8, 8), 17, dtype=torch.uint8),
+            "observation.images.a": torch.full((1, 3, 8, 8), 231, dtype=torch.uint8),
+        }
+        video = pre(batch)["video"]
+        expected = [231, 17] if mode in {"empty", "saved"} else [17, 231]
+        assert video[0, 0, :, 0, 0, 0].tolist() == expected
+        return {
+            "overall": {"pc_success_ci95": [0.0, 100.0], "pc_success": 0.0, "n_success": 0, "n_episodes": 1}
+        }
+
+    monkeypatch.setattr(lerobot_eval, "eval_policy_all", evaluate)
+    lerobot_eval.eval_main(cfg)
