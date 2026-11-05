@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+from contextlib import contextmanager
+from unittest.mock import MagicMock
+
 import gymnasium as gym
 import numpy as np
 import pytest
@@ -20,10 +24,14 @@ from torch import nn
 
 pytest.importorskip("datasets")
 
+from lerobot.configs.eval import EvalPipelineConfig
+from lerobot.envs.configs import AlohaEnvConfig
 from lerobot.lerobot_types import TransitionKey
+from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.flux3 import make_flux3_pre_post_processors
 from lerobot.processor import PolicyProcessorPipeline, ProcessorStep
 from lerobot.processor.factory import make_policy_processor_pipelines
+from lerobot.scripts import lerobot_eval
 from lerobot.scripts.lerobot_eval import rollout
 from lerobot.utils.constants import ACTION, OBS_STATE
 from tests.policies.flux3.helpers import task_config
@@ -190,3 +198,141 @@ def test_rollout_ends_at_the_step_cap_below_the_env_limit():
         env.close()
     assert result[ACTION].shape[1] == 3
     assert result["done"][0].tolist() == [False, False, True]
+
+
+class _RuntimeOwnedEnv(AlohaEnvConfig):
+    def evaluation_context(self, output_dir):
+        return self.context(output_dir)
+
+
+def _runtime_config(tmp_path, env):
+    return EvalPipelineConfig(
+        env=env,
+        policy=ACTConfig(device="cpu"),
+        output_dir=tmp_path,
+        job_name="runtime-test",
+        tf32=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [("policy", "requires a policy"), ("device", "no device"), ("output", "output_dir is not set")],
+)
+def test_eval_main_validates_before_runtime_start(tmp_path, monkeypatch, field, message):
+    env = _RuntimeOwnedEnv()
+    cfg = _runtime_config(tmp_path, env)
+    env.context = MagicMock(side_effect=AssertionError("Runtime started before validation"))
+    if field == "policy":
+        cfg.policy = None
+    elif field == "device":
+        cfg.policy.device = None
+    else:
+        cfg.output_dir = None
+
+    with pytest.raises(ValueError, match=message):
+        lerobot_eval.eval_main(cfg)
+
+    env.context.assert_not_called()
+
+
+def test_runtime_start_failure_prevents_evaluation(tmp_path, monkeypatch):
+    env = _RuntimeOwnedEnv()
+
+    @contextmanager
+    def context(output_dir):
+        raise RuntimeError("simulator startup failed")
+        yield
+
+    env.context = context
+    setup = MagicMock()
+    monkeypatch.setattr(lerobot_eval, "make_env", setup)
+    with pytest.raises(RuntimeError, match="simulator startup failed"):
+        lerobot_eval.eval_main(_runtime_config(tmp_path, env))
+    setup.assert_not_called()
+
+
+@pytest.mark.parametrize("provider", [False, True])
+@pytest.mark.parametrize("failure", [None, "policy", "evaluation"])
+def test_standard_evaluation_lifetime(tmp_path, monkeypatch, provider, failure):
+    events = []
+    output_dir = tmp_path / "results"
+    env = _RuntimeOwnedEnv() if provider else AlohaEnvConfig()
+    if provider:
+
+        @contextmanager
+        def context(path):
+            assert path == output_dir
+            events.append("start")
+            try:
+                yield
+            finally:
+                assert events[-1] == "close"
+                assert (path / "eval_info.json").exists() is (failure is None)
+                events.append("stop")
+
+        env.context = context
+    cfg = _runtime_config(output_dir, env)
+    envs = {"default": {0: object()}}
+    policy = MagicMock()
+    policy.config = cfg.policy
+    info = {"overall": {"pc_success_ci95": [0.0, 100.0], "pc_success": 0.0, "n_success": 0, "n_episodes": 1}}
+    device = MagicMock(return_value=torch.device("cpu"))
+    seed = MagicMock()
+
+    def create_env(*args, **kwargs):
+        if provider:
+            assert events == ["start"]
+        events.append("environment")
+        return envs
+
+    make_env = MagicMock(side_effect=create_env)
+    make_policy = MagicMock(return_value=policy)
+    if failure == "policy":
+        make_policy.side_effect = RuntimeError("policy failed")
+    evaluate = MagicMock(return_value=info)
+    if failure == "evaluation":
+        evaluate.side_effect = RuntimeError("evaluation failed")
+
+    def close_env(*args):
+        assert (output_dir / "eval_info.json").exists() is (failure is None)
+        events.append("close")
+
+    close = MagicMock(side_effect=close_env)
+    monkeypatch.setattr(lerobot_eval, "get_safe_torch_device", device)
+    monkeypatch.setattr(lerobot_eval, "set_seed", seed)
+    monkeypatch.setattr(lerobot_eval, "make_env", make_env)
+    monkeypatch.setattr(lerobot_eval, "make_policy", make_policy)
+    monkeypatch.setattr(lerobot_eval, "make_pre_post_processors", lambda **kwargs: ("pre", "post"))
+    monkeypatch.setattr(
+        lerobot_eval, "make_env_pre_post_processors", lambda **kwargs: ("env_pre", "env_post")
+    )
+    monkeypatch.setattr(lerobot_eval, "eval_policy_all", evaluate)
+    monkeypatch.setattr(lerobot_eval, "close_envs", close)
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", False)
+
+    if failure:
+        with pytest.raises(RuntimeError, match=f"{failure} failed"):
+            lerobot_eval.eval_main(cfg)
+        close.assert_called_once_with(envs)
+        assert evaluate.call_count == (1 if failure == "evaluation" else 0)
+        assert events[-1] == ("stop" if provider else "close")
+        return
+
+    lerobot_eval.eval_main(cfg)
+
+    device.assert_called_once_with("cpu", log=True)
+    seed.assert_called_once_with(cfg.seed)
+    make_env.assert_called_once_with(
+        cfg.env,
+        n_envs=cfg.eval.batch_size,
+        use_async_envs=cfg.eval.use_async_envs,
+        trust_remote_code=cfg.trust_remote_code,
+    )
+    make_policy.assert_called_once_with(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
+    assert evaluate.call_count == 1
+    assert evaluate.call_args.kwargs["start_seed"] == cfg.seed
+    assert evaluate.call_args.kwargs["preprocessor"] == "pre"
+    close.assert_called_once_with(envs)
+    assert json.loads((output_dir / "eval_info.json").read_text()) == info
+    assert events[-1] == ("stop" if provider else "close")

@@ -17,9 +17,11 @@ from __future__ import annotations
 import abc
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import draccus
@@ -211,6 +213,10 @@ class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
         # Sim keys reach the policy unchanged; --rename_map renames them, as for any env.
         self.features_map = {name: name for name in self.features}
         return descriptor, make
+
+    def evaluation_context(self, output_dir: Path) -> AbstractContextManager[None]:
+        """Manage resources that must surround standard evaluation, including result persistence."""
+        return nullcontext()
 
     def get_env_processors(self):
         """Return (preprocessor, postprocessor) for this env. Default: identity."""

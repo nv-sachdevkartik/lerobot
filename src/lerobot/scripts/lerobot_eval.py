@@ -56,7 +56,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from copy import deepcopy
 from dataclasses import asdict
 from functools import partial
@@ -823,6 +823,16 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         # EvalPipelineConfig.__post_init__ always assigns a default output_dir.
         raise ValueError("EvalPipelineConfig.output_dir is not set.")
 
+    with ExitStack() as stack:
+        stack.enter_context(cfg.env.evaluation_context(cfg.output_dir))
+        _eval_main(cfg, stack)
+
+
+def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
+    assert cfg.policy is not None
+    assert cfg.policy.device is not None
+    assert cfg.output_dir is not None
+
     # Check device is available
     device = get_safe_torch_device(cfg.policy.device, log=True)
 
@@ -841,6 +851,8 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         use_async_envs=cfg.eval.use_async_envs,
         trust_remote_code=cfg.trust_remote_code,
     )
+
+    stack.callback(close_envs, envs)
 
     # Environment-specific preprocessor and postprocessor (e.g. for LIBERO environments), built before
     # admission: a checkpoint is admitted on the observation and the action they produce.
@@ -921,9 +933,6 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         for task_group, task_group_info in info.items():
             logger.info(f"\nAggregated Metrics for {task_group}:")
             logger.info(task_group_info)
-    # Close all vec envs
-    close_envs(envs)
-
     # Save each task's language instruction next to the metrics; the benchmark CI report reads it.
     descriptions = {
         f"{group}_{task_id}": env.latest.task[0]
@@ -934,7 +943,8 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
     if descriptions:
         (Path(cfg.output_dir) / "task_descriptions.json").write_text(json.dumps(descriptions, indent=2))
 
-    # Save info
+    # Persist results before closing resources that may terminate the simulator process.
+    Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
     with open(Path(cfg.output_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
