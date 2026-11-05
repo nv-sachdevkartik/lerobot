@@ -29,8 +29,8 @@ from lerobot.configs.eval import EvalPipelineConfig
 from lerobot.envs.configs import AlohaEnvConfig
 from lerobot.lerobot_types import TransitionKey
 from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.flux3 import make_flux3_pre_post_processors
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyProcessorPipeline, ProcessorStep, RenameObservationsProcessorStep
 from lerobot.processor.factory import make_policy_processor_pipelines
 from lerobot.scripts import lerobot_eval
