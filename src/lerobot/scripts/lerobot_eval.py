@@ -614,7 +614,16 @@ def eval_policy(
         # Extend metrics.
         batch_sum_rewards = einops.reduce((rollout_data["reward"] * mask), "b n -> b", "sum")
         sum_rewards.extend(batch_sum_rewards.tolist())
-        valid_rewards = rollout_data["reward"].masked_fill(~mask, -torch.inf)
+        rewards = rollout_data["reward"]
+        # Exclude later steps without changing reward precision or overflowing integer tensors.
+        excluded_reward: float | int
+        if rewards.is_floating_point():
+            excluded_reward = -torch.inf
+        elif rewards.dtype == torch.bool:
+            excluded_reward = False
+        else:
+            excluded_reward = torch.iinfo(rewards.dtype).min
+        valid_rewards = rewards.masked_fill(~mask, excluded_reward)
         batch_max_rewards = einops.reduce(valid_rewards, "b n -> b", "max")
         max_rewards.extend(batch_max_rewards.tolist())
         batch_successes = einops.reduce((rollout_data["success"] * mask), "b n -> b", "any")

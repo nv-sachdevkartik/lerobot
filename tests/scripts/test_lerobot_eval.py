@@ -340,13 +340,14 @@ def test_standard_evaluation_lifetime(tmp_path, monkeypatch, provider, failure):
     assert events[-1] == ("stop" if provider else "close")
 
 
-def test_eval_metrics_exclude_steps_after_first_done(monkeypatch):
+@pytest.mark.parametrize("reward_dtype", [torch.float32, torch.float64, torch.int64])
+def test_eval_metrics_exclude_steps_after_first_done(monkeypatch, reward_dtype):
     policy = MagicMock(spec=PreTrainedPolicy)
     policy.config = SimpleNamespace(save_predicted_video=False)
     policy.training = False
     data = {
         "done": torch.tensor([[True, True, True], [False, True, True]]),
-        "reward": torch.tensor([[-3.0, 99.0, 99.0], [-4.0, -2.0, 99.0]]),
+        "reward": torch.tensor([[-3, 99, 99], [-4, -2, 99]], dtype=reward_dtype),
         "success": torch.tensor([[False, True, True], [False, True, False]]),
     }
     monkeypatch.setattr(lerobot_eval, "rollout", lambda **kwargs: data)
@@ -357,6 +358,30 @@ def test_eval_metrics_exclude_steps_after_first_done(monkeypatch):
     assert result["per_episode"][1]["sum_reward"] == -6.0
     assert result["per_episode"][1]["max_reward"] == -2.0
     assert result["per_episode"][1]["success"] is True
+
+
+@pytest.mark.parametrize(
+    "reward_dtype,rewards",
+    [
+        (torch.float64, [-(2**24 + 0.75), -(2**24 + 0.25), 99.0]),
+        (torch.int64, [-(2**53 + 3), -(2**53 + 1), 99]),
+        (torch.bool, [False, False, True]),
+    ],
+)
+def test_eval_terminal_reward_max_preserves_dtype_precision(monkeypatch, reward_dtype, rewards):
+    policy = MagicMock(spec=PreTrainedPolicy)
+    policy.config = SimpleNamespace(save_predicted_video=False)
+    policy.training = False
+    data = {
+        "done": torch.tensor([[False, True, True]]),
+        "reward": torch.tensor([rewards], dtype=reward_dtype),
+        "success": torch.tensor([[False, False, True]]),
+    }
+    monkeypatch.setattr(lerobot_eval, "rollout", lambda **kwargs: data)
+    result = lerobot_eval.eval_policy(SimpleNamespace(num_envs=1), policy, None, None, None, None, 1)
+    assert result["per_episode"][0]["sum_reward"] == sum(rewards[:2])
+    assert result["per_episode"][0]["max_reward"] == max(rewards[:2])
+    assert result["per_episode"][0]["success"] is False
 
 
 @pytest.mark.parametrize("step_sequence", [list, tuple], ids=["list", "tuple"])
