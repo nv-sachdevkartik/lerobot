@@ -15,6 +15,7 @@
 """Client for the env server."""
 
 import logging
+import sys
 import uuid
 from threading import RLock
 from typing import Any, Literal
@@ -238,8 +239,10 @@ class EnvClient:
                 raise
 
     def close(self) -> None:
-        """Close the session and the connection. If the server doesn't answer, log a warning instead of raising."""
+        """Close the session and connection; warn on absence, but propagate confirmed cleanup failures."""
         with self._lock:
+            body_error = sys.exception()
+            errors: list[BaseException] = []
             try:
                 if self.session_id and not self.failed:
                     # Short limit: if this is lost, the server still frees the session when the connection closes.
@@ -250,14 +253,36 @@ class EnvClient:
                         self.handshake_timeout_s,
                         MessageType.ACK,
                     )
-            except Exception as error:
+            except (TimeoutError, ConnectionError) as error:
                 logger.warning("Could not close the env server session cleanly: %s", error)
+            except ProtocolError as error:
+                if error.code is ErrorCode.STALE:
+                    # The session was already reaped, or this server replaced the instance that owned it.
+                    logger.warning("Could not close the env server session cleanly: %s", error)
+                else:
+                    errors.append(error)
+            except BaseException as error:
+                errors.append(error)
             finally:
-                self.transport.close()
-                self.session_id = ""
-                self.instance_id = ""
-                self.descriptor = None
-                self.failed = False
+                try:
+                    self.transport.close()
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    self.session_id = ""
+                    self.instance_id = ""
+                    self.descriptor = None
+                    self.failed = False
+                    self.num_envs = 0
+                    self.generation = 0
+            if errors:
+                if body_error is not None and all(body_error is not error for error in errors):
+                    errors.insert(0, body_error)
+                primary = next((error for error in errors if not isinstance(error, Exception)), errors[-1])
+                others = [error for error in errors if error is not primary]
+                if others:
+                    raise primary from BaseExceptionGroup("Additional env client cleanup failures", others)
+                raise primary
 
     def _query(
         self, key: str, kind: MessageType, body: dict[str, Any], timeout: float, expected: MessageType

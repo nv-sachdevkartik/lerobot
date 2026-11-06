@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import sys
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import singledispatch
 from typing import Any
 
@@ -250,10 +251,34 @@ def check_env_attributes_and_types(env: gym.vector.VectorEnv) -> None:
 
 
 def _close_single_env(env: Any) -> None:
+    body_error = sys.exception()
     try:
         env.close()
-    except Exception as exc:
-        logger.warning("Failed to close env %s: %s", env, exc)
+    except BaseException as error:
+        logger.exception("Failed to close env %s", env)
+        if body_error is not None and not isinstance(body_error, Exception) and body_error is not error:
+            raise body_error from error
+        raise
+
+
+def _close_collection(envs: Iterable[Any]) -> None:
+    errors: list[BaseException] = []
+    for env in envs:
+        try:
+            if isinstance(env, Mapping) or isinstance(env, Sequence) and not isinstance(env, (str, bytes)):
+                close_envs(env)
+            elif hasattr(env, "close"):
+                _close_single_env(env)
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        primary = next((error for error in errors if not isinstance(error, Exception)), errors[-1])
+        others = [error for error in errors if error is not primary]
+        if primary.__cause__ is not None:
+            others.append(primary.__cause__)
+        if others:
+            raise primary from BaseExceptionGroup("Additional environment cleanup failures", others)
+        raise primary
 
 
 @singledispatch
@@ -264,22 +289,14 @@ def close_envs(obj: Any) -> None:
 
 @close_envs.register
 def _(env: Mapping) -> None:
-    for v in env.values():
-        if isinstance(v, Mapping):
-            close_envs(v)
-        elif hasattr(v, "close"):
-            _close_single_env(v)
+    _close_collection(env.values())
 
 
 @close_envs.register
 def _(envs: Sequence) -> None:
     if isinstance(envs, (str | bytes)):
         return
-    for v in envs:
-        if isinstance(v, Mapping) or isinstance(v, Sequence) and not isinstance(v, (str | bytes)):
-            close_envs(v)
-        elif hasattr(v, "close"):
-            _close_single_env(v)
+    _close_collection(envs)
 
 
 @close_envs.register

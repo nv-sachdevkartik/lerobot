@@ -16,9 +16,10 @@
 
 import contextlib
 import logging
+import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from queue import Empty
 from threading import Event
@@ -60,12 +61,43 @@ from .protocol import (
 logger = logging.getLogger(__name__)
 
 
-def _close_resource(close: Callable[[], Any]) -> None:
-    """Record each cleanup failure before a later close can replace its traceback."""
+def _close_resources(*closes: Callable[[], Any]) -> None:
+    """Attempt every close; retain diagnostics and give cancellation precedence."""
+    body_error = sys.exception()
+    errors: list[BaseException] = []
+    for close in closes:
+        try:
+            close()
+        except BaseException as error:
+            logger.exception("Failed to close environment server resource")
+            errors.append(error)
+    if errors:
+        if body_error is not None and all(body_error is not error for error in errors):
+            errors.insert(0, body_error)
+        primary = next((error for error in errors if not isinstance(error, Exception)), errors[-1])
+        others = [error for error in errors if error is not primary]
+        if primary.__cause__ is not None:
+            others.append(primary.__cause__)
+        if others:
+            raise primary from BaseExceptionGroup("Additional environment server cleanup failures", others)
+        raise primary
+
+
+@contextlib.contextmanager
+def _preserve_cancellation(context: contextlib.AbstractContextManager) -> Iterator[None]:
+    """Keep a cancellation raised inside a provider from being replaced by its exit failure."""
+    failure: BaseException | None = None
     try:
-        close()
-    except BaseException:
-        logger.exception("Failed to close environment server resource")
+        with context:
+            try:
+                yield
+            except BaseException as error:
+                failure = error
+                raise
+    except BaseException as error:
+        if failure is not None and not isinstance(failure, Exception) and error is not failure:
+            logger.exception("Failed to exit environment server resource context during cancellation")
+            raise failure from error
         raise
 
 
@@ -183,12 +215,12 @@ class _Session:
         self.failure: str | None = None
         self.presence_established = False
         with contextlib.ExitStack() as cleanup:
-            cleanup.callback(env.close)
+            cleanup.callback(_close_resources, env.close)
             env.reset(seed=seeds)
             self.presence: BoundedSubscriber[PresenceEvent] = transport.subscribe_liveliness(
                 prefix + "/client_alive"
             )
-            cleanup.callback(_close_resource, self.presence.close)
+            cleanup.callback(_close_resources, self.presence.close)
             self.token: PresenceToken = transport.declare_token(prefix + "/alive")
             cleanup.pop_all()
         # Start the presence timeout only now: the client announces itself after it gets the open reply,
@@ -220,10 +252,7 @@ class _Session:
 
     def close(self) -> None:
         """Close the envs and stop the presence signals."""
-        with contextlib.ExitStack() as cleanup:
-            cleanup.callback(_close_resource, self.token.undeclare)
-            cleanup.callback(self.presence.close)
-            cleanup.callback(_close_resource, self.env.close)
+        _close_resources(self.env.close, self.presence.close, self.token.undeclare)
 
     def with_jpeg_frames(self, reply: dict[str, Any]) -> dict[str, Any]:
         """Mark camera frames for JPEG encoding if the client asked for it at open."""
@@ -260,13 +289,12 @@ class EnvServer:
     def serve(self) -> None:
         """Answer requests, then close worlds and transport before simulator resources."""
         with contextlib.ExitStack() as pending_cleanup:
-            pending_cleanup.callback(_close_resource, self.transport.close)
-            pending_cleanup.callback(self._close_worlds)
+            pending_cleanup.callback(_close_resources, self._close_worlds, self.transport.close)
             # A port already in use fails before the slow simulator build.
             self.transport.open()
             self.sim = SimConfig.resolve(asdict(self.config.sim))
             # Enter the provider first, then transfer cleanup so worlds/transport close before its exit.
-            with self.sim.resource_context(), pending_cleanup.pop_all():
+            with _preserve_cancellation(self.sim.resource_context()), pending_cleanup.pop_all():
                 try:
                     self._serve()
                 except BaseException:
@@ -313,12 +341,11 @@ class EnvServer:
 
     def _close_worlds(self) -> None:
         """Attempt every session and startup-world close, including after an earlier close fails."""
-        with contextlib.ExitStack() as cleanup:
-            if self._startup_env is not None:
-                cleanup.callback(_close_resource, self._startup_env.close)
-                self._startup_env = None
-            for session_id in reversed(list(self.sessions)):
-                cleanup.callback(_close_resource, self.sessions.pop(session_id).close)
+        closes = [self.sessions.pop(session_id).close for session_id in list(self.sessions)]
+        if self._startup_env is not None:
+            closes.append(self._startup_env.close)
+            self._startup_env = None
+        _close_resources(*closes)
 
     def stop(self) -> None:
         """Ask `serve` to close every session and return. Safe to call from another thread."""
@@ -468,12 +495,12 @@ class EnvServer:
             if lost or (
                 not session.presence_established and elapsed > self.config.initial_presence_timeout_s
             ):
-                self._close_session(session_id)
+                try:
+                    self._close_session(session_id)
+                except Exception:
+                    # No caller is waiting for a reply; keep reaping the other abandoned sessions.
+                    logger.exception("Failed to close abandoned session %s", session_id)
 
     def _close_session(self, session_id: str) -> None:
-        """Remove a session and close it. A failed close is logged, so it never stops the server."""
-        session = self.sessions.pop(session_id)
-        try:
-            session.close()
-        except Exception:
-            logger.exception("Failed to close session %s", session_id)
+        """Remove a session and close it; explicit requests report failures through `_reply`."""
+        self.sessions.pop(session_id).close()
