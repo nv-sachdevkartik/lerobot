@@ -385,7 +385,7 @@ def test_eval_terminal_reward_max_preserves_dtype_precision(monkeypatch, reward_
 
 
 @pytest.mark.parametrize("step_sequence", [list, tuple], ids=["list", "tuple"])
-@pytest.mark.parametrize("mode", ["existing", "missing", "empty", "saved"])
+@pytest.mark.parametrize("mode", ["existing", "missing", "empty"])
 def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatch, mode, step_sequence):
     from lerobot.policies.groot.processor_groot import GrootN17PackInputsStep
 
@@ -396,12 +396,10 @@ def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatc
     }
     if mode == "empty":
         cfg.rename_map = {}
-    elif mode == "saved":
-        cfg.policy.pretrained_path = tmp_path / "saved-policy"
 
     # The explicit camera mapping deliberately opposes alphabetical source order.
     pack = GrootN17PackInputsStep(video_modality_keys=["left", "right"], normalize_min_max=False)
-    rename = RenameObservationsProcessorStep(rename_map={"kept": "saved"} if mode == "saved" else {})
+    rename = RenameObservationsProcessorStep(rename_map={})
     steps = [pack] if mode == "missing" else [rename, pack]
     pre = PolicyProcessorPipeline(steps=step_sequence(steps))
     policy = MagicMock(config=cfg.policy)
@@ -417,9 +415,7 @@ def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatc
         assert pre.steps[-1] is pack
         if mode != "missing":
             assert pre.steps[0] is rename
-        if mode == "saved":
-            assert rename.rename_map == {"kept": "saved"}
-        elif mode == "empty":
+        if mode == "empty":
             assert rename.rename_map == {}
         else:
             assert pre.steps[0].rename_map == cfg.rename_map
@@ -429,7 +425,7 @@ def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatc
             "observation.images.a": torch.full((1, 3, 8, 8), 231, dtype=torch.uint8),
         }
         video = pre(batch)["video"]
-        expected = [231, 17] if mode in {"empty", "saved"} else [17, 231]
+        expected = [231, 17] if mode == "empty" else [17, 231]
         assert video[0, 0, :, 0, 0, 0].tolist() == expected
         return {
             "overall": {"pc_success_ci95": [0.0, 100.0], "pc_success": 0.0, "n_success": 0, "n_episodes": 1}
@@ -437,3 +433,41 @@ def test_eval_fresh_processors_apply_explicit_camera_rename(tmp_path, monkeypatc
 
     monkeypatch.setattr(lerobot_eval, "eval_policy_all", evaluate)
     lerobot_eval.eval_main(cfg)
+
+
+def test_invalid_saved_processor_propagates_and_closes_resources(tmp_path, monkeypatch):
+    events = []
+    env = _RuntimeOwnedEnv()
+
+    @contextmanager
+    def context(output_dir):
+        events.append("start")
+        try:
+            yield
+        finally:
+            events.append("stop")
+
+    env.context = context
+    cfg = _runtime_config(tmp_path / "results", env)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "policy_preprocessor.json").write_text("{broken json")
+    cfg.policy.pretrained_path = checkpoint
+    world = MagicMock(spec=["close"])
+    world.close.side_effect = lambda: events.append("close")
+    monkeypatch.setattr(lerobot_eval, "make_env", lambda *args, **kwargs: {"test": {0: world}})
+    monkeypatch.setattr(lerobot_eval, "make_env_pre_post_processors", lambda **kwargs: (None, None))
+    policy = MagicMock(return_value=MagicMock(config=cfg.policy))
+    evaluate = MagicMock()
+    monkeypatch.setattr(lerobot_eval, "make_policy", policy)
+    monkeypatch.setattr(lerobot_eval, "eval_policy_all", evaluate)
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", False)
+
+    with pytest.raises(json.JSONDecodeError):
+        lerobot_eval.eval_main(cfg)
+
+    policy.assert_called_once()
+    evaluate.assert_not_called()
+    world.close.assert_called_once()
+    assert events == ["start", "close", "stop"]
+    assert not (cfg.output_dir / "eval_info.json").exists()

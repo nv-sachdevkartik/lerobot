@@ -892,10 +892,12 @@ def _eval_main(cfg: EvalPipelineConfig, stack: ExitStack) -> None:
     policy.eval()
 
     # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
-    preprocessor_overrides = {
+    preprocessor_overrides: dict[str, Any] = {
         "device_processor": {"device": str(policy.config.device)},
-        "rename_observations_processor": {"rename_map": cfg.rename_map},
     }
+    # Omit an unspecified map so the checkpoint's saved camera identities survive loading.
+    if cfg.rename_map:
+        preprocessor_overrides["rename_observations_processor"] = {"rename_map": cfg.rename_map}
 
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=cfg.policy,
