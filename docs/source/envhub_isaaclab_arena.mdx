@@ -1,116 +1,249 @@
-# NVIDIA Isaac Lab-Arena
+# NVIDIA IsaacLab Arena & LeRobot
 
-Isaac Lab-Arena runs through the standard [EnvHub](./envhub) native vector interface.
-Use `lerobot-eval` for batched evaluation and `lerobot-env-server` to keep the simulator's
-Python dependencies separate from the policy environment. The adapter owns the native
-observations, actions and simulator lifetime; LeRobot needs no Arena-specific processor.
+[IsaacLab Arena](https://github.com/isaac-sim/IsaacLab-Arena) provides GPU-accelerated robotics simulation for policy evaluation. LeRobot connects to Arena through the standard [EnvHub](./envhub) native vector interface and environment server.
 
-## Select a compatible stack
+<img
+  src="https://huggingface.co/nvidia/isaaclab-arena-envs/resolve/main/assets/Gr1OpenMicrowaveEnvironment.png"
+  alt="IsaacLab Arena - GR1 Microwave Environment"
+  style={{ maxWidth: "100%", borderRadius: "8px", marginBottom: "1rem" }}
+/>
 
-Use the upgraded Arena and EnvHub checkouts together. The old EnvHub repository that only
-exports `make_env` does not implement this interface. Pin all three source revisions when
-reproducing a run; see the EnvHub checkout's README for its installation recipe and tested
-revisions. Do not combine the old Isaac Sim 5.1 / Isaac Lab 2.3 recipe with current Arena main.
+This integration supports **GR1 PINK opening the microwave**, with native GPU batching, a 512×512 robot POV camera, and standard LeRobot policy loaders and processors. Arena supports a broader environment catalog; other tasks and controllers need their own observation/action schema before they can use this provider.
 
-The initial adapter supports **GR1 PINK opening the microwave**. It preserves the native
-54-dimensional joint state, 36-dimensional absolute PINK command, 512×512 POV camera,
-50 Hz control and five-second episode horizon (250 steps). PINK commands are not joint
-position commands. Other embodiments and tasks require their own observation/action schema
-and simulator metadata; changing a dimension flag cannot make a checkpoint compatible.
+## Installation
 
-Install the simulator dependencies in the Arena environment/container and the policy extras
-in a separate LeRobot environment:
+### Prerequisites
+
+- A Linux machine with an NVIDIA GPU and driver compatible with the selected Isaac Sim runtime.
+- Matching upgraded Arena, Arena EnvHub and LeRobot source checkouts. The validated stack uses Isaac Sim 6.2 and Arena's pinned Isaac Lab submodule.
+- Separate simulator and policy Python environments. The native simulator uses Torch 2.11.0+cu130, NumPy 2.3.1 and Gymnasium 1.3.0; the tested policy client uses Torch 2.15.0 and Transformers 5.22.1.
+
+<Tip warning={true}>
+  The old Isaac Sim 5.1 / Isaac Lab 2.3 installation and the provider exporting
+  only `make_env` are not compatible with this migration. Use the matching
+  upgraded checkouts and record their exact revisions. The provider README lists
+  the tested code revisions and dependency exceptions.
+</Tip>
+
+### Setup
+
+**1. Prepare the simulator environment.** Build and start a fresh container using the matching Arena checkout's documented Docker workflow. Mount the upgraded EnvHub and LeRobot checkouts, then install the standard server inside the existing simulator environment:
 
 ```bash
-# In the policy environment, from the matching LeRobot source checkout:
-uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
-source .venv/bin/activate
+export ARENA_ENVHUB=/absolute/container/path/to/isaaclab-arena-envs
+export LEROBOT_SOURCE=/absolute/container/path/to/lerobot
+
+isaaclab.sh -p -m pip install --no-deps -e "$LEROBOT_SOURCE"
+isaaclab.sh -p -m pip install -r "$ARENA_ENVHUB/requirements.txt"
 ```
 
-## Serve Arena and evaluate
+Keep the simulator's native Torch/NumPy stack. This minimal server installation preserves existing simulator packages but has documented dependency metadata conflicts; it is not a fully resolved combined policy/simulator installation. The generic EnvHub `--docker=true` image does not provision these Arena source changes and submodules.
 
-After following the upgraded EnvHub README to install Arena and its matching native dependencies,
-start the standard server **inside that simulator environment**. `ARENA_ENVHUB` is the absolute
-path to the upgraded EnvHub checkout, visible inside the container if using Docker.
+**2. Prepare the policy environment.** From the matching LeRobot checkout on the client host:
+
+```bash
+uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
+source .venv/bin/activate
+export ARENA_ENVHUB=/absolute/client/path/to/isaaclab-arena-envs
+```
+
+The paths may differ inside and outside a container. The client still needs `env.hub_path` even when a server runs the simulator.
+
+**3. Start the environment server.** In the simulator container, using its own `ARENA_ENVHUB` path:
 
 ```bash
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
-export ARENA_ENVHUB=/absolute/path/to/isaaclab-arena-envs
-lerobot-env-server \
-  --envhub="$ARENA_ENVHUB" \
-  --sim.task=gr1_open_microwave \
-  --deployment=arena \
-  --max_sessions=1 --max_envs=2
+isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
+    --envhub="$ARENA_ENVHUB" \
+    --sim.task=gr1_open_microwave \
+    --sim.kwargs='{make_env_kwargs: {device: "cuda:0", headless: true}}' \
+    --max_sessions=1 --max_envs=2
 ```
 
-From the policy environment on the same host:
+Make port 7448 reachable from the policy client. The examples below use the same host's loopback address. Wait for the server's `Serving` message before evaluating; the first launch may compile shaders and load assets. One application owns one native batch and can rebuild it when the requested batch size changes. Stop the server normally after clients disconnect.
+
+## Evaluating Policies
+
+### Pre-trained Policies
+
+| Policy                                                                                   | Architecture | Task          | Checkpoint revision                        |
+| :--------------------------------------------------------------------------------------- | :----------- | :------------ | :----------------------------------------- |
+| [smolvla-arena-gr1-microwave](https://huggingface.co/nvidia/smolvla-arena-gr1-microwave) | SmolVLA      | GR1 microwave | `1fab07da0ffb6c263c9703c296745a730a6ea696` |
+| [pi05-arena-gr1-microwave](https://huggingface.co/nvidia/pi05-arena-gr1-microwave)       | PI0.5        | GR1 microwave | `9cf88e758aeb86be15e0f44364cad19cede23188` |
+
+### Evaluate SmolVLA
+
+Run from the policy environment:
 
 ```bash
 lerobot-eval \
-  --env.type=envhub --env.hub_path="$ARENA_ENVHUB" \
-  --env.server.endpoint=tcp/127.0.0.1:7448 \
-  --env.server.deployment=arena \
-  --policy.path=nvidia/smolvla-arena-gr1-microwave \
-  --policy.pretrained_revision=1fab07da0ffb6c263c9703c296745a730a6ea696 \
-  --policy.device=cuda \
-  --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
-  --eval.batch_size=2 --eval.n_episodes=2 --eval.use_async_envs=false \
-  --seed=42 --output_dir=outputs/arena-smolvla
+    --policy.path=nvidia/smolvla-arena-gr1-microwave \
+    --policy.pretrained_revision=1fab07da0ffb6c263c9703c296745a730a6ea696 \
+    --policy.device=cuda \
+    --env.type=envhub \
+    --env.hub_path="$ARENA_ENVHUB" \
+    --env.task=gr1_open_microwave \
+    --env.server.endpoint=tcp/127.0.0.1:7448 \
+    --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
+    --eval.batch_size=1 --eval.n_episodes=1 --eval.use_async_envs=false \
+    --seed=42 --output_dir=outputs/arena-smolvla
 ```
 
-The explicit rename above connects the native camera to this checkpoint's trained camera name.
-When a checkpoint already saves the desired rename processor, omit `--rename_map` to preserve it.
-An explicit `{}` clears saved renaming. Missing cameras, incompatible state/action dimensions and
-unavailable checkpoint assets must be fixed at their source; do not pad, substitute cameras or
-change policy precision to hide a mismatch.
+The camera rename connects the native camera to this checkpoint's trained input. If a checkpoint already saves the desired rename processor, omit `--rename_map` to preserve it. An explicit `{}` clears saved renaming. Do not substitute cameras or change precision to hide an incompatible checkpoint.
 
-The server owns one simulator application and one native GPU batch. It can rebuild the world
-when the requested batch changes, and supports one active client. It does not create a simulator
-process per environment. Stop the server normally after clients disconnect, and check its actual
-exit status as well as the evaluation results.
+### Evaluate PI0.5
 
-## Runtime qualification and recording
+Install the PI extra in the **policy environment**, retaining the other extras:
 
-The Isaac Sim 6.2 server stack was exercised with SmolVLA in one- and two-environment batches
-(three successful episodes), and PI0.5 in a one-environment batch (one successful episode).
-Camera videos decoded at 512×512 and 50 fps. These small runs establish inference and task
-completion for the pinned checkpoints, not a general success-rate or performance estimate.
-Native reset regressions, malformed-action rejection, reconnect, normal shutdown and startup-error
-cleanup were also checked. See the provider README for the source and dependency boundaries.
+```bash
+uv sync --locked --extra smolvla --extra pi --extra dataset --extra evaluation --extra remote
+```
 
-**Use the separate server for this stack.** In-process evaluation fails during CLI import:
-LeRobot eagerly imports G05 code requiring `get_vision_interpolation_indices_and_weights`, which
-Arena's pinned Transformers 5.10.4 does not provide. The tested policy client uses Transformers
-5.22.1. Installing policy extras into the simulator would also conflict with its native package
-versions; an in-process policy run is not qualified here.
+```bash
+lerobot-eval \
+    --policy.path=nvidia/pi05-arena-gr1-microwave \
+    --policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188 \
+    --policy.device=cuda \
+    --env.type=envhub \
+    --env.hub_path="$ARENA_ENVHUB" \
+    --env.task=gr1_open_microwave \
+    --env.server.endpoint=tcp/127.0.0.1:7448 \
+    --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
+    --eval.batch_size=1 --eval.n_episodes=1 --eval.use_async_envs=false \
+    --seed=42 --output_dir=outputs/arena-pi05
+```
 
-LeRobot records evaluation video in the output directory. Its standard evaluation recording options
-can also save rollouts as a dataset. The same descriptor is available through `--robot.type=sim`
-with `--robot.env.type=envhub` and the server endpoint for standard rollout/recording workflows.
-One standard synchronous SmolVLA episodic recording completed with uploads disabled. It recorded
-primary state, action and camera data; the eight auxiliary state tensors available in evaluation
-are not forwarded by the current sim-robot interface. Strict chunk/remote-policy validation that
-requires those tensors is therefore not qualified. The smoke recording achieved 3.71 Hz against
-a 50 Hz target, so it is not evidence of real-time operation. Disable both rollout and episodic
-return-to-initial-position options for this mixed wrist-pose/hand-joint command space.
-This is not a teleoperation controller for GR1 PINK.
-See [simulation](./simulation) for the shared CLI options.
+<Tip>
+  PI0.5 was validated with its saved bfloat16 and compilation settings.
+  First-action compilation can take several minutes; the old instruction to
+  disable compilation is no longer required for this tested stack. Its PaliGemma
+  tokenizer assets must also be available with the appropriate access.
+</Tip>
 
-## Migration from the legacy Arena path
+To evaluate two environments, set both `--eval.batch_size=2` and `--eval.n_episodes=2`, and choose a fresh output directory. Keep `--eval.use_async_envs=false`: the provider batches environments natively on the GPU.
 
-- Replace `--env.type=isaaclab_arena` with `envhub` and a matching upgraded provider.
-- Remove `state_keys`, `camera_keys`, `state_dim`, `action_dim`, `episode_length`, and the Arena-specific
-  video options. The provider defines the native schema and horizon; the evaluator owns recording.
-- Do not use `use_native_batch=true`: that legacy bypass skips the shared simulator interface.
-  The provider's `vector_env_fns` selects native batching automatically.
-- Remove the Arena observation processor and bespoke evaluation/process wrappers. Canonical
-  conversion, policy loading and processor pipelines use the standard LeRobot paths.
+### What to Expect
 
-Each reset applies its supplied seed to the corresponding native slot. Subsequent stochastic
-simulation still shares the native RNG; this is not a guarantee of independent random streams.
-Completed slots return their first terminal observation and outcome until explicit reset while other
-slots finish. No replacement episode contributes to the result.
+The evaluator reports episode progress, task success and aggregated metrics. The validated server runs completed three SmolVLA episodes across batches of one and two, and one PI0.5 episode, all successfully. The batched episodes finished at different steps. These small smoke runs establish inference and task completion for the pinned stack; they do not estimate general policy reliability or performance parity.
 
-A successful installation or contract test is distinct from learned inference and task success.
-Only the exact checkpoint/controller/task/runtime combinations exercised by a runtime report are
-qualified. Old PI0.5 and SmolVLA results from previous integration revisions are not results for this migration.
+### Video Recording
+
+The standard evaluator writes camera videos to the output directory. The provider enables the native camera in headless mode; the legacy `env.video`, `video_length` and `video_interval` flags are no longer used. Validated videos decoded at 512×512 and 50 fps.
+
+Standard dataset recording is also available through `--robot.type=sim`, `--robot.env.type=envhub` and the environment server. See [simulation](./simulation) for the shared rollout options. For this mixed wrist-pose/hand-joint action space, set both `--return_to_initial_position=false` and `--strategy.reset_to_initial_position=false`.
+
+A synchronous SmolVLA recording completed with uploads disabled: one finalized episode and 19 state/action/image frames. It achieved 3.71 Hz against a 50 Hz target, so it does not establish real-time operation. Current sim-robot omits the eight auxiliary state tensors available in evaluation; strict chunk/remote-policy paths requiring them are not qualified.
+
+### Output Directory
+
+With the explicit SmolVLA output directory above, evaluation results include:
+
+```text
+outputs/arena-smolvla/
+├── eval_info.json
+├── task_descriptions.json
+└── videos/
+    └── gr1_open_microwave_0/
+        └── eval_episode_0.mp4
+```
+
+Use a new output directory for each evaluation.
+
+## Training Policies
+
+Follow the policy-specific training guides:
+
+- [SmolVLA](./smolvla)
+- [PI0.5](./pi05)
+- [GR00T](./groot)
+
+[Arena GR1 manipulation data](https://huggingface.co/datasets/nvidia/Arena-GR1-Manipulation-Task-v3) is available on the Hub. Check a dataset's observation/action schema and controller before training or evaluating. The provider's runtime qualification covers the checkpoints listed above, not every policy architecture or Arena dataset.
+
+## Environment Configuration
+
+### Full Configuration Options
+
+The provider declares the task schema through `LEROBOT_SIM`; dimensions and horizons are not CLI overrides.
+
+| Setting                         | Value or option                                                                                     |
+| :------------------------------ | :-------------------------------------------------------------------------------------------------- |
+| Task                            | `gr1_open_microwave`; alias `gr1_microwave`                                                         |
+| Controller                      | GR1 PINK                                                                                            |
+| Primary state                   | 54 native joint positions, radians                                                                  |
+| Actions                         | 36 values: left/right absolute wrist XYZ and `wxyz` quaternions, then 22 ordered hand joint targets |
+| Camera                          | `robot_pov_cam_rgb`, 512×512 RGB                                                                    |
+| Native control rate and horizon | 50 Hz; 5 seconds / 250 steps                                                                        |
+| Simulator options               | `device`, `headless`, optional native `object` through `--sim.kwargs`                               |
+| Evaluation batching             | `--eval.batch_size`, `--eval.n_episodes`, `--eval.use_async_envs=false`                             |
+
+PINK actions are not joint-position commands. Each reset applies the supplied seed to its native slot; subsequent stochastic simulation shares the native RNG. Completed slots retain their first terminal observation and outcome at the provider interface while their peers finish, with zero subsequent reward and no replacement episode.
+
+### Using Environment Hub directly for advanced usage
+
+The provider exports lazy `vector_env_fns` for one native batch. Use the standard [EnvHub](./envhub) and [simulation](./simulation) interfaces for custom clients. Arena's registered Gym environment must be unwrapped for native `env_ids` resets; the provider handles that boundary.
+
+### Migrating from the legacy Arena configuration
+
+- Replace `--env.type=isaaclab_arena` with `--env.type=envhub` and the matching upgraded provider.
+- Replace `--env.environment` with `--env.task=gr1_open_microwave`.
+- Remove Arena-only `state_keys`, `camera_keys`, dimension, horizon and video options; use the declared native schema and standard evaluator recording.
+- Remove the Arena-specific observation processor and `use_native_batch=true`. Native batching is selected through `vector_env_fns`.
+
+## Creating New Environments
+
+Create the native task and embodiment in [IsaacLab Arena](https://github.com/isaac-sim/IsaacLab-Arena), then follow [EnvHub](./envhub) to expose its vector factory and metadata. Define truthful state/action names, units, camera features, control rate and reset behavior. Test that schema before adding the task to the supported catalog; changing a dimension flag does not make another controller compatible.
+
+<Tip>
+  The native environment code and assets must be available in the simulator
+  environment. The legacy `example_envs.yaml` mapping is not the new provider
+  contract.
+</Tip>
+
+## Troubleshooting
+
+### CUDA out of memory
+
+Start with `--eval.batch_size=1`. The simulator and policy both consume GPU memory even when their Python environments are separate.
+
+### EULA not accepted
+
+Set these variables in the simulator environment before launch:
+
+```bash
+export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
+```
+
+### Video recording not working
+
+Use the upgraded provider with its native camera enabled and inspect the evaluator's output directory. Do not restore the old Arena-specific video flags or substitute a different camera.
+
+### Policy output dimension mismatch
+
+Use a checkpoint trained for the native 54-state/36-action GR1 PINK contract. Check the camera rename and action ordering. Do not pad, clip or override dimensions to bypass a mismatch.
+
+### In-process evaluation fails during import
+
+Use the separate server. LeRobot eagerly imports G05 code requiring `get_vision_interpolation_indices_and_weights`, which Arena's pinned Transformers 5.10.4 does not provide. The tested client uses 5.22.1. No in-process GPU policy execution is qualified for this stack.
+
+### Server startup is slow
+
+First startup can compile shaders, cook collision geometry and load assets. Wait for `Serving`, inspect logs and use a bounded startup timeout. Check the server's actual exit status after stopping it. Native reset, malformed-action rejection, reconnect, normal shutdown and startup-error cleanup were exercised for the validated stack.
+
+## See Also
+
+- [EnvHub Documentation](./envhub)
+- [Simulation and Environment Servers](./simulation)
+- [IsaacLab Arena GitHub](https://github.com/isaac-sim/IsaacLab-Arena)
+- [Arena EnvHub](https://huggingface.co/nvidia/isaaclab-arena-envs)
+
+## Lightwheel LW-BenchHub
+
+[LW-BenchHub](https://github.com/LightwheelAI/LW-BenchHub) is a separate integration. This migration qualifies only the GR1 PINK microwave provider. The previous Lightwheel commands depended on the removed Arena-specific config and are not validated with this interface. Consult the [LW-BenchHub documentation](https://docs.lightwheel.net/lw_benchhub/) for its supported setup.
+
+Sections that were moved:
+
+[ <a href="#installation">Select a compatible stack</a><a id="select-a-compatible-stack"></a> ]
+[ <a href="#evaluating-policies">Serve Arena and evaluate</a><a id="serve-arena-and-evaluate"></a> ]
+[ <a href="#what-to-expect">Runtime qualification and recording</a><a id="runtime-qualification-and-recording"></a> ]
+[ <a href="#migrating-from-the-legacy-arena-configuration">Migration from the legacy Arena path</a><a id="migration-from-the-legacy-arena-path"></a> ]
+[ <a href="#setup">libGLU.so.1 Errors during Isaac Sim initialization</a><a id="libgluso1-errors-during-isaac-sim-initialization"></a> ]
