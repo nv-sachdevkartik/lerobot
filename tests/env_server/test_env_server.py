@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import draccus
 import numpy as np
 import pytest
 
@@ -345,6 +346,48 @@ def test_local_environment_matches_the_server(sim_server):
         assert actual[4]["metrics"].keys() == expected[4]["metrics"].keys()
         for name, values in expected[4]["metrics"].items():
             np.testing.assert_array_equal(actual[4]["metrics"][name], values)
+
+
+def test_served_request_timeout_defaults_to_120_seconds():
+    assert EnvClientConfig("tcp/127.0.0.1:7448").timeout_s == 120.0
+
+
+def test_served_request_timeout_can_be_configured_from_the_cli():
+    config = draccus.parse(
+        ToyEnvConfig, args=["--server.endpoint=tcp/127.0.0.1:7448", "--server.timeout_s=900.5"]
+    )
+    assert config.server is not None
+    assert config.server.timeout_s == 900.5
+    assert config.server.handshake_timeout_s == 10.0
+
+
+@pytest.mark.parametrize("timeout_s", [0.0, -1.0, float("nan"), float("inf"), -float("inf")])
+def test_served_request_timeout_must_be_positive_and_finite(timeout_s):
+    with pytest.raises(ValueError, match="timeout_s must be positive and finite"):
+        EnvClientConfig("tcp/127.0.0.1:7448", timeout_s=timeout_s)
+
+
+@pytest.mark.parametrize("timeout_s", [120.0, 900.5])
+def test_served_factory_forwards_request_timeout_to_probe_and_session(sim_server, monkeypatch, timeout_s):
+    clients = []
+
+    def connect(*args, **kwargs):
+        client = EnvClient(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("lerobot.env_server.EnvClient", connect)
+    server = EnvClientConfig(sim_server[1], handshake_timeout_s=0.75)
+    server.timeout_s = timeout_s
+    env = ToyEnvConfig(server=server).create_env(n_envs=1)
+    try:
+        assert len(clients) == 2
+        assert [client.timeout_s for client in clients] == [timeout_s, timeout_s]
+        assert [client.handshake_timeout_s for client in clients] == [0.75, 0.75]
+        env.reset(seed=[17])
+        env.step(np.zeros((1, 2), np.float32))
+    finally:
+        env.close()
 
 
 def test_served_env_must_be_the_env_the_command_describes(sim_server):

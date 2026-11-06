@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import math
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, fields
@@ -63,8 +64,12 @@ class EnvClientConfig:
     # Largest reply in bytes, which carries every env's camera frames. Raise it with the server's
     # zenoh.max_payload_bytes for large batches or high resolution cameras.
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    # Seconds to wait for each request, such as a simulator step. Handshake timeout stays separate.
+    timeout_s: float = SERVED_TIMEOUT_S
 
     def __post_init__(self):
+        if not math.isfinite(self.timeout_s) or self.timeout_s <= 0:
+            raise ValueError("Env server timeout_s must be positive and finite")
         if self.encoding not in {"raw", "jpeg"} or not 1 <= self.jpeg_quality <= 100:
             raise ValueError("Env server encoding must be raw or jpeg, with jpeg_quality in [1, 100]")
 
@@ -165,7 +170,7 @@ class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
                 EnvClient,
                 server.endpoint,
                 server.deployment or self.type,
-                SERVED_TIMEOUT_S,
+                server.timeout_s,
                 handshake_timeout_s=server.handshake_timeout_s,
                 zenoh_config_path=server.zenoh_config_path,
                 max_payload_bytes=server.max_payload_bytes,
