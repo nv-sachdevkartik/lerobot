@@ -281,52 +281,61 @@ def test_prepare_model_inputs_no_state_omitted(patch_vla_jepa_external_models: N
 def _make_hub_train_batch(policy: VLAJEPAPolicy, batch_size: int = 1) -> dict:
     """Build a training batch whose keys/shapes match a hub-loaded policy config."""
     cfg = policy.config
+    device = next(policy.parameters()).device
     batch: dict = {"task": ["pick up the cube"] * batch_size}
     for key, feat in cfg.image_features.items():
         h, w = feat.shape[-2], feat.shape[-1]
-        batch[key] = torch.rand(batch_size, cfg.num_video_frames, 3, h, w)
+        batch[key] = torch.rand(batch_size, cfg.num_video_frames, 3, h, w, device=device)
     if cfg.robot_state_feature is not None:
-        batch["observation.state"] = torch.randn(batch_size, 1, cfg.robot_state_feature.shape[0])
-    batch[ACTION] = torch.randn(batch_size, cfg.chunk_size, cfg.action_dim)
+        batch["observation.state"] = torch.randn(
+            batch_size, 1, cfg.robot_state_feature.shape[0], device=device
+        )
+    batch[ACTION] = torch.randn(batch_size, cfg.chunk_size, cfg.action_dim, device=device)
     return batch
 
 
 def _make_hub_inference_batch(policy: VLAJEPAPolicy, batch_size: int = 1) -> dict:
     """Build an inference batch whose keys/shapes match a hub-loaded policy config."""
     cfg = policy.config
+    device = next(policy.parameters()).device
     batch: dict = {"task": ["pick up the cube"] * batch_size}
     for key, feat in cfg.image_features.items():
         h, w = feat.shape[-2], feat.shape[-1]
-        batch[key] = torch.rand(batch_size, 3, h, w)
+        batch[key] = torch.rand(batch_size, 3, h, w, device=device)
     if cfg.robot_state_feature is not None:
-        batch["observation.state"] = torch.randn(batch_size, cfg.robot_state_feature.shape[0])
+        batch["observation.state"] = torch.randn(batch_size, cfg.robot_state_feature.shape[0], device=device)
     return batch
 
 
 _CP_ROOT = "lerobot"
 
-# Each tuple: (repo_id, enable_world_model)
+# Pin public checkpoints so their configuration cannot drift beneath the assertions.
+_LIBERO_REVISION = "735d9f692981e286ade093b5046627eda876e5d0"
+_PRETRAIN_REVISION = "e946c3e5b538d760f4b4ff239d1b1c12090c041d"
+_SIMPLER_ENV_REVISION = "8b9ec33f57d8cdc0e064873a637a1f92e3164e53"
+
+# Each tuple: (repo_id, revision, enable_world_model). All three pinned configs enable it.
 _HUB_VARIANTS = [
-    (f"{_CP_ROOT}/VLA-JEPA-LIBERO", True),
-    (f"{_CP_ROOT}/VLA-JEPA-Pretrain", True),
-    (f"{_CP_ROOT}/VLA-JEPA-SimplerEnv", False),
+    (f"{_CP_ROOT}/VLA-JEPA-LIBERO", _LIBERO_REVISION, True),
+    (f"{_CP_ROOT}/VLA-JEPA-Pretrain", _PRETRAIN_REVISION, True),
+    (f"{_CP_ROOT}/VLA-JEPA-SimplerEnv", _SIMPLER_ENV_REVISION, True),
 ]
 
 
 @extended_test
-@pytest.mark.parametrize("repo_id,enable_world_model", _HUB_VARIANTS)
-def test_hub_checkpoint_loads(repo_id: str, enable_world_model: bool) -> None:
+@pytest.mark.parametrize("repo_id,revision,enable_world_model", _HUB_VARIANTS)
+def test_hub_checkpoint_loads(repo_id: str, revision: str, enable_world_model: bool) -> None:
     """Policy loads from the converted safetensors checkpoint on the Hub."""
-    policy = VLAJEPAPolicy.from_pretrained(repo_id)
+    policy = VLAJEPAPolicy.from_pretrained(repo_id, revision=revision)
     assert policy.config.enable_world_model == enable_world_model
     assert sum(p.numel() for p in policy.parameters()) > 0
 
 
 @extended_test
-@pytest.mark.parametrize("repo_id,enable_world_model", _HUB_VARIANTS)
-def test_hub_checkpoint_forward_pass(repo_id: str, enable_world_model: bool) -> None:
+@pytest.mark.parametrize("repo_id,revision,enable_world_model", _HUB_VARIANTS)
+def test_hub_checkpoint_forward_pass(repo_id: str, revision: str, enable_world_model: bool) -> None:
     """Policy loaded from hub produces finite losses with a correctly-shaped batch."""
-    policy = VLAJEPAPolicy.from_pretrained(repo_id)
+    policy = VLAJEPAPolicy.from_pretrained(repo_id, revision=revision)
     policy.train()
 
     batch = _make_hub_train_batch(policy)
@@ -340,7 +349,9 @@ def test_hub_checkpoint_forward_pass(repo_id: str, enable_world_model: bool) -> 
 @extended_test
 def test_hub_freeze_qwen_disables_world_model() -> None:
     """freeze_qwen=True (via cli_overrides) freezes qwen and disables the world model."""
-    policy = VLAJEPAPolicy.from_pretrained(f"{_CP_ROOT}/VLA-JEPA-LIBERO", cli_overrides=["freeze_qwen=true"])
+    policy = VLAJEPAPolicy.from_pretrained(
+        f"{_CP_ROOT}/VLA-JEPA-LIBERO", revision=_LIBERO_REVISION, cli_overrides=["--freeze_qwen=true"]
+    )
     assert not policy.config.enable_world_model
     assert policy.model.video_predictor is None
     qwen_params = list(policy.model.qwen.parameters())
@@ -350,21 +361,30 @@ def test_hub_freeze_qwen_disables_world_model() -> None:
 
 @extended_test
 def test_hub_disable_world_model_loads_simpler_env() -> None:
-    """SimplerEnv checkpoint (world model disabled) loads cleanly and runs inference."""
-    policy = VLAJEPAPolicy.from_pretrained(f"{_CP_ROOT}/VLA-JEPA-SimplerEnv")
+    """An explicit override disables the world model of the pinned SimplerEnv checkpoint."""
+    policy = VLAJEPAPolicy.from_pretrained(
+        f"{_CP_ROOT}/VLA-JEPA-SimplerEnv",
+        revision=_SIMPLER_ENV_REVISION,
+        cli_overrides=["--enable_world_model=false"],
+    )
     assert not policy.config.enable_world_model
     assert policy.model.video_predictor is None
     assert policy.model.video_encoder is None
+    policy.eval()
+    action = policy.select_action(_make_hub_inference_batch(policy))
+    assert action.shape[-1] == policy.config.action_dim
+    assert torch.isfinite(action).all()
 
 
 @extended_test
 def test_hub_libero_inference_shape() -> None:
     """select_action returns the expected shape using the LIBERO hub checkpoint."""
-    policy = VLAJEPAPolicy.from_pretrained(f"{_CP_ROOT}/VLA-JEPA-LIBERO")
+    policy = VLAJEPAPolicy.from_pretrained(f"{_CP_ROOT}/VLA-JEPA-LIBERO", revision=_LIBERO_REVISION)
     policy.eval()
     batch = _make_hub_inference_batch(policy)
     action = policy.select_action(batch)
     assert action.shape[-1] == policy.config.action_dim
+    assert torch.isfinite(action).all()
 
 
 # ---------------------------------------------------------------------------
