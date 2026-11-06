@@ -42,7 +42,7 @@ from .converters import (
 )
 from .delta_action_processor import MapDeltaActionToRobotActionStep, MapTensorToDeltaActionDictStep
 from .device_processor import DeviceProcessorStep
-from .env_processor import IsaaclabArenaProcessorStep, LiberoProcessorStep
+from .env_processor import LiberoProcessorStep
 from .factory import (
     DefaultPolicyProcessorSteps,
     load_pretrained_policy_processors,
@@ -169,7 +169,6 @@ __all__ = [
     "RewardClassifierProcessorStep",
     "RewardProcessorStep",
     "DataProcessorPipeline",
-    "IsaaclabArenaProcessorStep",
     "LiberoProcessorStep",
     "TimeLimitProcessorStep",
     "AddBatchDimensionProcessorStep",

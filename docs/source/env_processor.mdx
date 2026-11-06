@@ -8,9 +8,10 @@ Simulated environments reach the policy already canonical: images as `observatio
 
 Put a new simulator's observation mapping in its integration and its control conventions in that integration's `conventions()` rather than in an environment processor, so that a sim robot and a served environment get them too (see [Adding a benchmark](./adding_benchmarks)).
 
+Isaac Lab-Arena exports `vector_env_fns` from its EnvHub repository. The provider emits `agent_pos` and `pixels`; the standard simulator conversion supplies canonical state and image features without an Arena-specific processor.
+
 ## When an environment processor is still the tool
 
-- **Environments outside `lerobot.sim`.** Isaac Lab Arena runs through its repository's own `make_env`, with batched torch observations; `IsaaclabArenaProcessorStep` selects and concatenates its state keys and converts its cameras.
 - **Policy-specific environment adaptations.** `make_env_pre_post_processors` lets a policy replace the environment's pair, as XVLA and Cosmos3 do for LIBERO.
 
 Evaluation admits a checkpoint on what its environment processors produce: the observation after the preprocessor and the action after the postprocessor, both read from their `transform_features`. A step therefore declares its output there as a function of its input, the way it behaves at runtime, for example a step that builds the state only when its source key is present. Remote inference applies no environment processors, so a checkpoint served there has to take the simulator's observation and command its action itself.

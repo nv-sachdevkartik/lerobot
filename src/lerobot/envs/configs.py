@@ -17,7 +17,7 @@ from __future__ import annotations
 import abc
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
@@ -27,12 +27,12 @@ import gymnasium as gym
 
 from lerobot.configs import FeatureType, PolicyFeature
 from lerobot.env_server import DEFAULT_MAX_PAYLOAD_BYTES
-from lerobot.processor import IsaaclabArenaProcessorStep, PolicyProcessorPipeline
+from lerobot.processor import PolicyProcessorPipeline
 from lerobot.robots import RobotConfig
 from lerobot.sim import EnvDescriptor, SimConfig
 from lerobot.sim.integrations import envhub
 from lerobot.teleoperators.config import TeleoperatorConfig
-from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
+from lerobot.utils.constants import ACTION
 
 if TYPE_CHECKING:
     from lerobot.env_server import RemoteVectorEnv
@@ -272,7 +272,7 @@ class HubEnvConfig(EnvConfig):
             raise ValueError("use_native_batch runs locally; it cannot use an env server")
         if not self.hub_path:
             raise ValueError("--env.hub_path is required for an EnvHub environment")
-        # Provider configs (Isaac Lab Arena, Unitree G1) subclass this one and also pass themselves as `cfg`,
+        # Provider configs (e.g. Unitree G1) subclass this one and also pass themselves as `cfg`,
         # since their options are config fields.
         provider = None if type(self) is HubEnvConfig else self
         return envhub.make_envs(
@@ -627,86 +627,6 @@ class VLABenchEnvConfig(EnvConfig):
 
     def sim_settings(self) -> dict[str, Any]:
         return {"type": "vlabench", "task": self.task, "kwargs": {"gym_kwargs": self.gym_kwargs}}
-
-
-@EnvConfig.register_subclass("isaaclab_arena")
-@dataclass
-class IsaaclabArenaEnvConfig(HubEnvConfig):
-    hub_path: str = "nvidia/isaaclab-arena-envs"
-    # Run the repo's own vector env locally, as an EnvHub native batch.
-    use_native_batch: bool = True
-    episode_length: int = 300
-    num_envs: int = 1
-    embodiment: str | None = "gr1_pink"
-    object: str | None = "power_drill"
-    mimic: bool = False
-    teleop_device: str | None = None
-    seed: int | None = 42
-    device: str | None = "cuda:0"
-    disable_fabric: bool = False
-    enable_cameras: bool = False
-    headless: bool = False
-    enable_pinocchio: bool = True
-    environment: str | None = "gr1_microwave"
-    task: str | None = "Reach out to the microwave and open it."
-    state_dim: int = 54
-    action_dim: int = 36
-    camera_height: int = 512
-    camera_width: int = 512
-    video: bool = False
-    video_length: int = 100
-    video_interval: int = 200
-    # Comma-separated keys, e.g., "robot_joint_pos,left_eef_pos"
-    state_keys: str = "robot_joint_pos"
-    # Comma-separated keys, e.g., "robot_pov_cam_rgb,front_cam_rgb"
-    # Set to None or "" for environments without cameras
-    camera_keys: str | None = None
-    features: dict[str, PolicyFeature] = field(default_factory=dict)
-    features_map: dict[str, str] = field(default_factory=dict)
-    kwargs: dict | None = None
-
-    def __post_init__(self):
-        if self.make_env_kwargs:
-            raise ValueError(f"--env.type={self.type} is configured by its own options, not make_env_kwargs")
-        if self.kwargs:
-            # dynamically convert kwargs to fields in the dataclass
-            # NOTE! the new fields will not bee seen by the dataclass repr
-            field_names = {f.name for f in fields(self)}
-            for key, value in self.kwargs.items():
-                if key not in field_names and key != "kwargs":
-                    setattr(self, key, value)
-            self.kwargs = None
-
-        # Set action feature
-        self.features[ACTION] = PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,))
-        self.features_map[ACTION] = ACTION
-
-        # Set state feature
-        self.features[OBS_STATE] = PolicyFeature(type=FeatureType.STATE, shape=(self.state_dim,))
-        self.features_map[OBS_STATE] = OBS_STATE
-
-        # Add camera features for each camera key
-        if self.enable_cameras and self.camera_keys:
-            for cam_key in self.camera_keys.split(","):
-                cam_key = cam_key.strip()
-                if cam_key:
-                    self.features[cam_key] = PolicyFeature(
-                        type=FeatureType.VISUAL,
-                        shape=(self.camera_height, self.camera_width, 3),
-                    )
-                    self.features_map[cam_key] = f"{OBS_IMAGES}.{cam_key}"
-
-    def get_env_processors(self):
-        state_keys = tuple(k.strip() for k in (self.state_keys or "").split(",") if k.strip())
-        camera_keys = tuple(k.strip() for k in (self.camera_keys or "").split(",") if k.strip())
-        if not state_keys and not camera_keys:
-            raise ValueError("At least one of state_keys or camera_keys must be specified.")
-        return (
-            PolicyProcessorPipeline(
-                steps=[IsaaclabArenaProcessorStep(state_keys=state_keys, camera_keys=camera_keys)]
-            ),
-            PolicyProcessorPipeline(steps=[]),
-        )
 
 
 class G1EndEffector(StrEnum):
