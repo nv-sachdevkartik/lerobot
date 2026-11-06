@@ -39,8 +39,8 @@ class EvalPipelineConfig:
     seed: int | None = 1000
     # TF32 in float32 matmuls and cuDNN convolutions on Ampere and newer GPUs.
     tf32: bool | None = True
-    # Rename map for the observation to override the image and state keys
-    rename_map: dict[str, str] = field(default_factory=dict)
+    # None preserves checkpoint-saved observation renaming; an explicit map (including {}) overrides it.
+    rename_map: dict[str, str] | None = None
     # Explicit consent to execute remote code from the Hub (required for hub environments).
     trust_remote_code: bool = False
 

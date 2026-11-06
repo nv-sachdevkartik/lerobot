@@ -87,6 +87,7 @@ from lerobot.lerobot_types import PolicyAction
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
 from lerobot.processor import (
     PolicyProcessorPipeline,
+    RenameObservationsProcessorStep,
     bind_relative_anchor,
     policy_output_to_transition,
     transition_to_policy_action,
@@ -317,7 +318,7 @@ def rollout(
                 except (AttributeError, NotImplementedError):
                     observation["task"] = [""] * env.num_envs
 
-            # Apply environment-specific preprocessing (e.g., IsaaclabArenaProcessorStep for Isaac Lab Arena)
+            # Apply environment-specific preprocessing.
             observation = env_preprocessor(observation)
 
             observation = preprocessor(observation)
@@ -808,6 +809,17 @@ def _compile_episode_data(
     return data_dict
 
 
+def _processor_rename_map(preprocessor: PolicyProcessorPipeline) -> dict[str, str]:
+    """Return observation renames composed in the loaded pipeline's execution order."""
+    mapping: dict[str, str] = {}
+    for step in preprocessor.steps:
+        if isinstance(step, RenameObservationsProcessorStep):
+            mapping = {source: step.rename_map.get(target, target) for source, target in mapping.items()} | {
+                source: target for source, target in step.rename_map.items() if source not in mapping
+            }
+    return mapping
+
+
 @parser.wrap()
 def eval_main(cfg: EvalPipelineConfig) -> None:
     logging.info(pformat(asdict(cfg)))
@@ -842,87 +854,112 @@ def eval_main(cfg: EvalPipelineConfig) -> None:
         trust_remote_code=cfg.trust_remote_code,
     )
 
-    # Environment-specific preprocessor and postprocessor (e.g. for LIBERO environments), built before
-    # admission: a checkpoint is admitted on the observation and the action they produce.
-    env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
-
-    # Check the checkpoint against the sim before loading the policy. Hub-only and native-batch envs have
-    # no descriptor.
-    first_env = next(env for tasks in envs.values() for env in tasks.values())
-    descriptor = getattr(first_env, "descriptor", None)
-    if descriptor is not None:
-        validate_checkpoint(
-            descriptor,
-            cfg.policy,
-            cfg.rename_map,
-            env_preprocessor=env_preprocessor,
-            env_postprocessor=env_postprocessor,
+    try:
+        # Environment-specific preprocessor and postprocessor (e.g. for LIBERO environments), built before
+        # admission: a checkpoint is admitted on the observation and the action they produce.
+        env_preprocessor, env_postprocessor = make_env_pre_post_processors(
+            env_cfg=cfg.env, policy_cfg=cfg.policy
         )
 
-    logging.info("Making policy.")
-    policy = make_policy(
-        cfg=cfg.policy,
-        env_cfg=cfg.env,
-        rename_map=cfg.rename_map,
-    )
+        # A scratch policy derives its feature configuration from the environment when built. Its
+        # processors need those features; pretrained configurations already contain them.
+        policy = None
+        if not cfg.policy.pretrained_path:
+            policy = make_policy(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
 
-    policy.eval()
-
-    # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
-    preprocessor_overrides = {
-        "device_processor": {"device": str(policy.config.device)},
-        "rename_observations_processor": {"rename_map": cfg.rename_map},
-    }
-
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg.policy,
-        pretrained_path=cfg.policy.pretrained_path,
-        pretrained_revision=cfg.policy.pretrained_revision,
-        preprocessor_overrides=preprocessor_overrides,
-    )
-
-    recording_dir = Path(cfg.output_dir) / "recordings" if cfg.eval.recording else None
-    max_episodes_rendered = 0 if cfg.eval.recording else 10
-    videos_dir = None if cfg.eval.recording else Path(cfg.output_dir) / "videos"
-
-    with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext():
-        info = eval_policy_all(
-            envs=envs,
-            policy=policy,
-            env_preprocessor=env_preprocessor,
-            env_postprocessor=env_postprocessor,
-            preprocessor=preprocessor,
-            postprocessor=postprocessor,
-            n_episodes=cfg.eval.n_episodes,
-            max_episodes_rendered=max_episodes_rendered,
-            videos_dir=videos_dir,
-            return_episode_data=False,
-            start_seed=cfg.seed,
-            max_parallel_tasks=cfg.env.max_parallel_tasks,
-            recording_dir=recording_dir,
-            env_features=cfg.env.features if cfg.eval.recording else None,
-            recording_repo_id=cfg.eval.recording_repo_id,
-            recording_private=cfg.eval.recording_private,
-            max_episode_steps=cfg.eval.max_episode_steps,
+        # Load the same processors used for inference before admission, so checkpoint-saved camera names
+        # are checked consistently. An absent CLI map must not erase the saved processor configuration.
+        preprocessor_overrides: dict[str, Any] = {"device_processor": {"device": str(device)}}
+        if cfg.rename_map is not None:
+            preprocessor_overrides["rename_observations_processor"] = {"rename_map": cfg.rename_map}
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=cfg.policy.pretrained_path,
+            pretrained_revision=cfg.policy.pretrained_revision,
+            preprocessor_overrides=preprocessor_overrides,
         )
-        logger.info("Overall Aggregated Metrics:")
-        logger.info(info["overall"])
-        ci_low, ci_high = info["overall"]["pc_success_ci95"]
-        logger.info(
-            "Success rate %.1f%% (%d/%d episodes, 95%% Wilson interval %.1f%% to %.1f%%)",
-            info["overall"]["pc_success"],
-            info["overall"]["n_success"],
-            info["overall"]["n_episodes"],
-            ci_low,
-            ci_high,
-        )
+        if not cfg.policy.pretrained_path and cfg.rename_map is not None:
+            # Scratch processor factories do not load overrides from a checkpoint.
+            rename_steps = [s for s in preprocessor.steps if isinstance(s, RenameObservationsProcessorStep)]
+            if rename_steps:
+                for step in rename_steps:
+                    step.rename_map = dict(cfg.rename_map)
+            else:
+                preprocessor.steps = [
+                    RenameObservationsProcessorStep(dict(cfg.rename_map)),
+                    *preprocessor.steps,
+                ]
+        rename_map = _processor_rename_map(preprocessor)
 
-        # Print per-suite stats
-        for task_group, task_group_info in info.items():
-            logger.info(f"\nAggregated Metrics for {task_group}:")
-            logger.info(task_group_info)
-    # Close all vec envs
-    close_envs(envs)
+        # Check the checkpoint against the sim before loading the policy. Hub-only and native-batch envs have
+        # no descriptor.
+        first_env = next(env for tasks in envs.values() for env in tasks.values())
+        descriptor = getattr(first_env, "descriptor", None)
+        if descriptor is not None:
+            validate_checkpoint(
+                descriptor,
+                cfg.policy,
+                rename_map,
+                env_preprocessor=env_preprocessor,
+                env_postprocessor=env_postprocessor,
+            )
+
+        if policy is None:
+            logging.info("Making policy.")
+            policy = make_policy(
+                cfg=cfg.policy,
+                env_cfg=cfg.env,
+                rename_map=rename_map,
+            )
+
+        policy.eval()
+
+        recording_dir = Path(cfg.output_dir) / "recordings" if cfg.eval.recording else None
+        max_episodes_rendered = 0 if cfg.eval.recording else 10
+        videos_dir = None if cfg.eval.recording else Path(cfg.output_dir) / "videos"
+
+        with (
+            torch.no_grad(),
+            torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
+        ):
+            info = eval_policy_all(
+                envs=envs,
+                policy=policy,
+                env_preprocessor=env_preprocessor,
+                env_postprocessor=env_postprocessor,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                n_episodes=cfg.eval.n_episodes,
+                max_episodes_rendered=max_episodes_rendered,
+                videos_dir=videos_dir,
+                return_episode_data=False,
+                start_seed=cfg.seed,
+                max_parallel_tasks=cfg.env.max_parallel_tasks,
+                recording_dir=recording_dir,
+                env_features=cfg.env.features if cfg.eval.recording else None,
+                recording_repo_id=cfg.eval.recording_repo_id,
+                recording_private=cfg.eval.recording_private,
+                max_episode_steps=cfg.eval.max_episode_steps,
+            )
+            logger.info("Overall Aggregated Metrics:")
+            logger.info(info["overall"])
+            ci_low, ci_high = info["overall"]["pc_success_ci95"]
+            logger.info(
+                "Success rate %.1f%% (%d/%d episodes, 95%% Wilson interval %.1f%% to %.1f%%)",
+                info["overall"]["pc_success"],
+                info["overall"]["n_success"],
+                info["overall"]["n_episodes"],
+                ci_low,
+                ci_high,
+            )
+
+            # Print per-suite stats
+            for task_group, task_group_info in info.items():
+                logger.info(f"\nAggregated Metrics for {task_group}:")
+                logger.info(task_group_info)
+
+    finally:
+        close_envs(envs)
 
     # Save each task's language instruction next to the metrics; the benchmark CI report reads it.
     descriptions = {
