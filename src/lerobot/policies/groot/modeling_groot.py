@@ -32,9 +32,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, Unpack
 
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import _CACHED_NO_EXIST, constants, hf_hub_download, try_to_load_from_cache
 from huggingface_hub.constants import SAFETENSORS_SINGLE_FILE
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub.errors import LocalEntryNotFoundError, RemoteEntryNotFoundError
 from torch import Tensor
 
 from lerobot.configs import FeatureType, PolicyFeature
@@ -204,27 +204,35 @@ class GrootPolicy(PreTrainedPolicy):
         model_id = str(pretrained_name_or_path)
         is_finetuned_checkpoint = False
 
-        # Check if this is a fine-tuned LeRobot checkpoint (has model.safetensors)
-        try:
-            if os.path.isdir(model_id):
-                is_finetuned_checkpoint = os.path.exists(os.path.join(model_id, SAFETENSORS_SINGLE_FILE))
-            else:
-                # Try to download the safetensors file to check if it exists
-                try:
-                    hf_hub_download(
-                        repo_id=model_id,
-                        filename=SAFETENSORS_SINGLE_FILE,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=False,  # Just check, don't force download
-                        token=token,
-                        local_files_only=local_files_only,
+        # Only a confirmed missing file identifies a base checkpoint. Network, authentication,
+        # revision and offline-cache failures cannot establish which model layout the caller selected.
+        if os.path.isdir(model_id):
+            is_finetuned_checkpoint = os.path.exists(os.path.join(model_id, SAFETENSORS_SINGLE_FILE))
+        else:
+            try:
+                hf_hub_download(
+                    repo_id=model_id,
+                    filename=SAFETENSORS_SINGLE_FILE,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=False,
+                    token=token,
+                    local_files_only=local_files_only,
+                )
+                is_finetuned_checkpoint = True
+            except RemoteEntryNotFoundError:
+                is_finetuned_checkpoint = False
+            except LocalEntryNotFoundError:
+                # An offline cache miss is inconclusive unless the Hub previously confirmed absence
+                # for this cached revision. Never use a stale negative cache after an online failure.
+                if (
+                    not (local_files_only or constants.HF_HUB_OFFLINE)
+                    or try_to_load_from_cache(
+                        model_id, SAFETENSORS_SINGLE_FILE, cache_dir=cache_dir, revision=revision
                     )
-                    is_finetuned_checkpoint = True
-                except HfHubHTTPError:
-                    is_finetuned_checkpoint = False
-        except Exception:
-            is_finetuned_checkpoint = False
+                    is not _CACHED_NO_EXIST
+                ):
+                    raise
 
         if is_finetuned_checkpoint:
             # This is a fine-tuned LeRobot checkpoint - use parent class loading
