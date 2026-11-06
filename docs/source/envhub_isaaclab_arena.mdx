@@ -69,27 +69,31 @@ when the requested batch changes, and supports one active client. It does not cr
 process per environment. Stop the server normally after clients disconnect, and check its actual
 exit status as well as the evaluation results.
 
-## Local execution and recording
+## Runtime qualification and recording
 
-The same EnvHub can be selected in-process in a compatible Arena/LeRobot Python environment:
+The Isaac Sim 6.2 server stack was exercised with SmolVLA in one- and two-environment batches
+(three successful episodes), and PI0.5 in a one-environment batch (one successful episode).
+Camera videos decoded at 512×512 and 50 fps. These small runs establish inference and task
+completion for the pinned checkpoints, not a general success-rate or performance estimate.
+Native reset regressions, malformed-action rejection, reconnect, normal shutdown and startup-error
+cleanup were also checked. See the provider README for the source and dependency boundaries.
 
-```bash
-lerobot-eval \
-  --env.type=envhub --env.hub_path="$ARENA_ENVHUB" --trust_remote_code=true \
-  --policy.path=nvidia/smolvla-arena-gr1-microwave \
-  --policy.pretrained_revision=1fab07da0ffb6c263c9703c296745a730a6ea696 \
-  --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
-  --eval.batch_size=1 --eval.n_episodes=1 --eval.use_async_envs=false
-```
-
-Use the server when the simulator and policy dependency versions conflict. In-process execution
-also depends on the selected Isaac Sim runtime shutting down cleanly; installing both packages
-alone does not establish compatibility.
+**Use the separate server for this stack.** In-process evaluation fails during CLI import:
+LeRobot eagerly imports G05 code requiring `get_vision_interpolation_indices_and_weights`, which
+Arena's pinned Transformers 5.10.4 does not provide. The tested policy client uses Transformers
+5.22.1. Installing policy extras into the simulator would also conflict with its native package
+versions; an in-process policy run is not qualified here.
 
 LeRobot records evaluation video in the output directory. Its standard evaluation recording options
 can also save rollouts as a dataset. The same descriptor is available through `--robot.type=sim`
 with `--robot.env.type=envhub` and the server endpoint for standard rollout/recording workflows.
-This describes interface compatibility, not a teleoperation controller for the GR1 PINK command space.
+One standard synchronous SmolVLA episodic recording completed with uploads disabled. It recorded
+primary state, action and camera data; the eight auxiliary state tensors available in evaluation
+are not forwarded by the current sim-robot interface. Strict chunk/remote-policy validation that
+requires those tensors is therefore not qualified. The smoke recording achieved 3.71 Hz against
+a 50 Hz target, so it is not evidence of real-time operation. Disable both rollout and episodic
+return-to-initial-position options for this mixed wrist-pose/hand-joint command space.
+This is not a teleoperation controller for GR1 PINK.
 See [simulation](./simulation) for the shared CLI options.
 
 ## Migration from the legacy Arena path
