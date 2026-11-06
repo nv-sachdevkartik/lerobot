@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -30,6 +31,19 @@ from lerobot.transport.protocol import ErrorCode, MessageType, ProtocolError
 from lerobot.transport.zenoh import ZenohConfig
 from tests.fixtures.sim_server import free_port
 from tests.fixtures.toy_env import ToyEnv, ToyEnvConfig
+
+
+def test_transport_closes_when_startup_environment_cleanup_fails():
+    server = object.__new__(EnvServer)
+    server.sessions = {}
+    server.transport = Mock()
+    server.transport.open.side_effect = RuntimeError("startup failed")
+    server._startup_env = Mock()
+    server._startup_env.close.side_effect = RuntimeError("world cleanup failed")
+    with pytest.raises(RuntimeError, match="world cleanup failed"):
+        server.serve()
+    server._startup_env.close.assert_called_once()
+    server.transport.close.assert_called_once()
 
 
 def test_torch_free_import():

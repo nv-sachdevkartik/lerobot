@@ -290,9 +290,11 @@ class EnvServer:
         finally:
             for session_id in list(self.sessions):
                 self._close_session(session_id)
-            if self._startup_env is not None:
-                self._startup_env.close()
-            self.transport.close()
+            try:
+                if self._startup_env is not None:
+                    self._startup_env.close()
+            finally:
+                self.transport.close()
 
     def stop(self) -> None:
         """Ask `serve` to close every session and return. Safe to call from another thread."""
