@@ -18,6 +18,7 @@ import contextlib
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from queue import Empty
 from threading import Event
@@ -57,6 +58,16 @@ from .protocol import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _close_resource(close: Callable[[], Any]) -> None:
+    """Record each cleanup failure before a later close can replace its traceback."""
+    try:
+        close()
+    except BaseException:
+        logger.exception("Failed to close environment server resource")
+        raise
+
 
 # Reply space kept for everything except observations: rewards, flags, task text and the envelope.
 _REPLY_HEADROOM_BYTES = 64 * 1024
@@ -177,7 +188,7 @@ class _Session:
             self.presence: BoundedSubscriber[PresenceEvent] = transport.subscribe_liveliness(
                 prefix + "/client_alive"
             )
-            cleanup.callback(self.presence.close)
+            cleanup.callback(_close_resource, self.presence.close)
             self.token: PresenceToken = transport.declare_token(prefix + "/alive")
             cleanup.pop_all()
         # Start the presence timeout only now: the client announces itself after it gets the open reply,
@@ -209,11 +220,10 @@ class _Session:
 
     def close(self) -> None:
         """Close the envs and stop the presence signals."""
-        try:
-            self.env.close()
-        finally:
-            self.presence.close()
-            self.token.undeclare()
+        with contextlib.ExitStack() as cleanup:
+            cleanup.callback(_close_resource, self.token.undeclare)
+            cleanup.callback(self.presence.close)
+            cleanup.callback(_close_resource, self.env.close)
 
     def with_jpeg_frames(self, reply: dict[str, Any]) -> dict[str, Any]:
         """Mark camera frames for JPEG encoding if the client asked for it at open."""
@@ -248,51 +258,67 @@ class EnvServer:
         self._stop = Event()
 
     def serve(self) -> None:
-        """Answer requests until `stop` is called. Every simulator call happens on this thread."""
-        try:
-            # Open the transport first, so a port already in use fails before the slow simulator build.
+        """Answer requests, then close worlds and transport before simulator resources."""
+        with contextlib.ExitStack() as pending_cleanup:
+            pending_cleanup.callback(_close_resource, self.transport.close)
+            pending_cleanup.callback(self._close_worlds)
+            # A port already in use fails before the slow simulator build.
             self.transport.open()
             self.sim = SimConfig.resolve(asdict(self.config.sim))
-            self._startup_env = LocalVectorEnv(self.sim)
-            self.descriptor = self._startup_env.descriptor
-            root = deployment_prefix(self.config.deployment)
-            instance = instance_prefix(self.config.deployment, self.instance_id)
-            describe = self.transport.declare_queryable(
-                root + "/describe", reply_timeout=self.config.request_timeout_s
-            )
-            # Also answer clients that do not name a deployment.
-            any_describe = self.transport.declare_queryable(
-                ANY_DEPLOYMENT_DESCRIBE, reply_timeout=self.config.request_timeout_s
-            )
-            requests = self.transport.declare_queryable(
-                instance + "/**", reply_timeout=self.config.request_timeout_s
-            )
-            self.transport.declare_token(instance + "/alive")
-            zenoh = self.config.zenoh
-            logger.info(
-                "Serving %s task %r as deployment %r on %s",
-                self.sim.type,
-                self.sim.task,
-                self.config.deployment,
-                ", ".join(zenoh.listen_endpoints or zenoh.connect_endpoints),
-            )
-            self.ready.set()
-            while not self._stop.is_set():
-                for channel in (describe, any_describe, requests):
-                    for _ in range(8):
-                        try:
-                            pending = channel.get()
-                        except Empty:
-                            break
-                        self._reply(pending)
-                self._reap_sessions()
-                self._stop.wait(0.002)
-        finally:
-            for session_id in list(self.sessions):
-                self._close_session(session_id)
+            # Enter the provider first, then transfer cleanup so worlds/transport close before its exit.
+            with self.sim.resource_context(), pending_cleanup.pop_all():
+                try:
+                    self._serve()
+                except BaseException:
+                    # Record the original failure before cleanup or a process-terminating provider close.
+                    logger.exception("Environment server failed")
+                    raise
+
+    def _serve(self) -> None:
+        """Build and step the simulator on the thread running ``serve``."""
+        self._startup_env = LocalVectorEnv(self.sim)
+        self.descriptor = self._startup_env.descriptor
+        root = deployment_prefix(self.config.deployment)
+        instance = instance_prefix(self.config.deployment, self.instance_id)
+        describe = self.transport.declare_queryable(
+            root + "/describe", reply_timeout=self.config.request_timeout_s
+        )
+        # Also answer clients that do not name a deployment.
+        any_describe = self.transport.declare_queryable(
+            ANY_DEPLOYMENT_DESCRIBE, reply_timeout=self.config.request_timeout_s
+        )
+        requests = self.transport.declare_queryable(
+            instance + "/**", reply_timeout=self.config.request_timeout_s
+        )
+        self.transport.declare_token(instance + "/alive")
+        zenoh = self.config.zenoh
+        logger.info(
+            "Serving %s task %r as deployment %r on %s",
+            self.sim.type,
+            self.sim.task,
+            self.config.deployment,
+            ", ".join(zenoh.listen_endpoints or zenoh.connect_endpoints),
+        )
+        self.ready.set()
+        while not self._stop.is_set():
+            for channel in (describe, any_describe, requests):
+                for _ in range(8):
+                    try:
+                        pending = channel.get()
+                    except Empty:
+                        break
+                    self._reply(pending)
+            self._reap_sessions()
+            self._stop.wait(0.002)
+
+    def _close_worlds(self) -> None:
+        """Attempt every session and startup-world close, including after an earlier close fails."""
+        with contextlib.ExitStack() as cleanup:
             if self._startup_env is not None:
-                self._startup_env.close()
-            self.transport.close()
+                cleanup.callback(_close_resource, self._startup_env.close)
+                self._startup_env = None
+            for session_id in reversed(list(self.sessions)):
+                cleanup.callback(_close_resource, self.sessions.pop(session_id).close)
 
     def stop(self) -> None:
         """Ask `serve` to close every session and return. Safe to call from another thread."""

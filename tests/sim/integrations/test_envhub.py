@@ -336,3 +336,46 @@ def test_envhub_batched_repository_runs_in_a_worker_process(tmp_path, monkeypatc
         assert env.step(np.zeros((2, 2), np.float32))[4]["task"] == ("reach 1.0", "reach 1.0")
     finally:
         env.close()
+
+
+@pytest.mark.parametrize("body_error", [False, True])
+def test_envhub_resource_context_forwards_task_options_and_errors(hub_repo, monkeypatch, body_error):
+    hub_repo(
+        _ENVHUB_ENV
+        + """
+import builtins
+import sys
+from contextlib import contextmanager
+
+@contextmanager
+def resource_context(task, spacing):
+    builtins.resource_events.append(("start", task, spacing))
+    try:
+        yield
+    finally:
+        error = sys.exc_info()[1]
+        builtins.resource_events.append(("stop", str(error) if error else None))
+"""
+    )
+    monkeypatch.setattr(builtins, "resource_events", [], raising=False)
+    sim = _envhub()
+    sim.task = "reach_suite"
+    sim.kwargs["make_env_kwargs"] = {"spacing": 2.0}
+    if body_error:
+        with pytest.raises(ValueError, match="server loop failed"), sim.resource_context():
+            raise ValueError("server loop failed")
+    else:
+        with sim.resource_context():
+            assert builtins.resource_events == [("start", "reach_suite", 2.0)]
+    assert builtins.resource_events == [
+        ("start", "reach_suite", 2.0),
+        ("stop", "server loop failed" if body_error else None),
+    ]
+
+
+def test_envhub_resource_context_is_optional_and_requires_consent(hub_repo):
+    hub_repo(_ENVHUB_ENV)
+    with _envhub().resource_context():
+        pass
+    with pytest.raises(RuntimeError, match="Refusing"), _envhub(trust_remote_code=False).resource_context():
+        pass

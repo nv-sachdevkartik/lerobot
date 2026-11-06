@@ -18,16 +18,20 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from lerobot.env_server import EnvClient, EnvServer, EnvServerConfig, RemoteVectorEnv
+from lerobot.env_server import EnvClient, EnvServer, EnvServerConfig, RemoteVectorEnv, server as server_module
 from lerobot.env_server.protocol import decode_descriptor, encode_descriptor, instance_prefix
 from lerobot.envs import EnvClientConfig
 from lerobot.sim import SimSettings
 from lerobot.transport.protocol import ErrorCode, MessageType, ProtocolError
 from lerobot.transport.zenoh import ZenohConfig
+from tests.fixtures import toy_env
 from tests.fixtures.sim_server import free_port
 from tests.fixtures.toy_env import ToyEnv, ToyEnvConfig
 
@@ -431,3 +435,166 @@ def test_an_absent_server_is_reported_within_the_handshake_timeout():
         assert time.monotonic() - start < 5
     finally:
         client.close()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "startup",
+        "serve",
+        "session",
+        "world",
+        "transport",
+        "all_cleanup",
+        "serve_and_cleanup",
+        "context_enter",
+        "transport_open",
+    ],
+)
+def test_server_resource_context_closes_after_every_world_and_transport(monkeypatch, caplog, failure):
+    events = []
+
+    @contextmanager
+    def resource_context(task, **options):
+        assert task == "reach" and options == {"task_ids": [0]}
+        events.append("app_start")
+        if failure == "context_enter":
+            raise RuntimeError("context enter failed")
+        try:
+            yield
+        except BaseException as error:
+            events.append(("app_error", str(error)))
+            raise
+        finally:
+            events.append("app_stop")
+
+    monkeypatch.setattr(toy_env, "resource_context", resource_context, raising=False)
+    server = EnvServer(EnvServerConfig(sim=SimSettings(**ToyEnvConfig().sim_settings()), deployment="toy"))
+
+    def close(name, fail=False):
+        events.append(name)
+        if fail:
+            raise RuntimeError(f"{name} failed")
+
+    transport = MagicMock()
+    transport.open.side_effect = lambda: close("transport_open", failure == "transport_open")
+    transport.close.side_effect = lambda: close(
+        "transport", failure in {"transport", "all_cleanup", "serve_and_cleanup"}
+    )
+    if failure in {"serve", "serve_and_cleanup"}:
+        transport.declare_token.side_effect = RuntimeError("serve failed")
+    server.transport = transport
+
+    def make_world(*args, **kwargs):
+        events.append("world_build")
+        if failure == "startup":
+            raise RuntimeError("startup failed")
+        return SimpleNamespace(
+            descriptor=object(),
+            close=lambda: close("world", failure in {"world", "all_cleanup", "serve_and_cleanup"}),
+        )
+
+    monkeypatch.setattr(server_module, "LocalVectorEnv", make_world)
+    server.sessions = {
+        "first": SimpleNamespace(
+            close=lambda: close("first_session", failure in {"session", "all_cleanup", "serve_and_cleanup"})
+        ),
+        "second": SimpleNamespace(close=lambda: close("second_session")),
+    }
+    server.stop()
+    if failure:
+        with pytest.raises(RuntimeError, match="failed"):
+            server.serve()
+    else:
+        server.serve()
+
+    assert events[0] == "transport_open"
+    if failure == "transport_open":
+        assert events == ["transport_open", "first_session", "second_session", "transport"]
+        return
+    assert events[1] == "app_start"
+    if failure == "context_enter":
+        assert events == ["transport_open", "app_start", "first_session", "second_session", "transport"]
+        return
+    assert events.index("first_session") < events.index("second_session") < events.index("transport")
+    if failure != "startup":
+        assert events.index("second_session") < events.index("world") < events.index("transport")
+    assert events[-1] == "app_stop"
+    assert server.sessions == {}
+    assert transport.close.call_count == 1
+    errors = [event for event in events if isinstance(event, tuple)]
+    assert bool(errors) is (failure is not None)
+    if failure in {"all_cleanup", "serve_and_cleanup"}:
+        assert errors == [("app_error", "transport failed")]
+        assert "first_session failed" in caplog.text
+        assert "world failed" in caplog.text
+        assert "transport failed" in caplog.text
+        if failure == "serve_and_cleanup":
+            assert "serve failed" in caplog.text
+
+
+def test_server_resource_context_survives_protocol_rejection_and_reconnect(monkeypatch):
+    pytest.importorskip("zenoh")
+    pytest.importorskip("msgpack")
+    events = []
+
+    @contextmanager
+    def resource_context(task, **options):
+        events.append("start")
+        try:
+            yield
+        finally:
+            events.append("stop")
+
+    monkeypatch.setattr(toy_env, "resource_context", resource_context, raising=False)
+    endpoint = f"tcp/127.0.0.1:{free_port()}"
+    server = EnvServer(
+        EnvServerConfig(
+            sim=SimSettings(**ToyEnvConfig().sim_settings()),
+            deployment="toy",
+            max_envs=1,
+            zenoh=ZenohConfig(listen_endpoints=[endpoint]),
+        )
+    )
+    thread = threading.Thread(target=server.serve)
+    thread.start()
+    try:
+        assert server.ready.wait(5)
+        first = EnvClient(endpoint, "toy")
+        try:
+            with pytest.raises(ProtocolError, match="between 1 and 1"):
+                first.open(2)
+            first.open(1, seeds=[3])
+        finally:
+            first.close()
+        second = EnvClient(endpoint, "toy")
+        try:
+            second.open(1, seeds=[4])
+            second.request("step", actions=np.zeros((1, 2), np.float32))
+        finally:
+            second.close()
+        assert events == ["start"]
+    finally:
+        server.stop()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert events == ["start", "stop"]
+
+
+@pytest.mark.parametrize("failure", ["env", "presence", "token"])
+def test_session_close_attempts_every_resource(failure):
+    events = []
+
+    def close(name):
+        events.append(name)
+        if name == failure:
+            raise RuntimeError(f"{name} failed")
+
+    session = server_module._Session.__new__(server_module._Session)
+    session.env = SimpleNamespace(close=lambda: close("env"))
+    session.presence = SimpleNamespace(close=lambda: close("presence"))
+    session.token = SimpleNamespace(undeclare=lambda: close("token"))
+    with pytest.raises(RuntimeError, match=f"{failure} failed"):
+        session.close()
+    assert events == ["env", "presence", "token"]

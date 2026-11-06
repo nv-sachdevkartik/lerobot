@@ -16,6 +16,7 @@
 
 import importlib
 import math
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +70,13 @@ class SimConfig:
             raise ValueError(f"A simulator needs a positive fps, got {self.fps}")
         if not self.semantics:
             self.semantics = f"{self.type}-{self.control_mode.replace('_', '-')}-v1"
+
+    def resource_context(self) -> AbstractContextManager[None]:
+        """Own optional simulator resources across a complete server lifetime."""
+        with simulator_required(self.type):
+            integration = importlib.import_module(f"lerobot.sim.integrations.{self.type}")
+            make_context = getattr(integration, "resource_context", None)
+            return make_context(task=self.task, **self.kwargs) if make_context is not None else nullcontext()
 
     @classmethod
     def resolve(cls, settings: dict[str, Any]) -> "SimConfig":

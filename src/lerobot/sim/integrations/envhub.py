@@ -18,6 +18,7 @@ import importlib.util
 import logging
 import os
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from difflib import get_close_matches
 from functools import partial
 from typing import Any
@@ -27,7 +28,14 @@ from huggingface_hub import hf_hub_download, snapshot_download
 
 from .utils import canonical_observation
 
-__all__ = ["canonical_observation", "conventions", "env_fns", "make_envs", "vector_env_fns"]
+__all__ = [
+    "canonical_observation",
+    "conventions",
+    "env_fns",
+    "make_envs",
+    "resource_context",
+    "vector_env_fns",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +246,19 @@ def env_fns(
         suite: {task_id: _env_factories(vec, n_envs) for task_id, vec in tasks.items()}
         for suite, tasks in _normalize_hub_result(result).items()
     }
+
+
+def resource_context(
+    task: str,
+    hub_path: str,
+    trust_remote_code: bool = False,
+    hub_cache_dir: str | None = None,
+    make_env_kwargs: dict[str, Any] | None = None,
+) -> AbstractContextManager[None]:
+    """Return the repository's optional server-lifetime context, or a no-op."""
+    _, module = _load_hub_module(hub_path, trust_remote_code, hub_cache_dir)
+    make_context = getattr(module, "resource_context", None)
+    return make_context(task=task, **(make_env_kwargs or {})) if make_context is not None else nullcontext()
 
 
 def vector_env_fns(

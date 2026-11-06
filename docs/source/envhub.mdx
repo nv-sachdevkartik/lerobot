@@ -350,6 +350,20 @@ def vector_env_fns(task: str, n_envs: int, **make_env_kwargs):
 
 Each vector env must have `num_envs == n_envs`, must not autoreset (`metadata["autoreset_mode"] = gym.vector.AutoresetMode.DISABLED`), returns batched observations in the format above, takes one seed per env in `reset(seed=[...])`, and reports `info["is_success"]` per env. `--env.make_env_kwargs` are passed to it, and both `lerobot-eval` and the simulator server use it in place of `make_env`. Since one vector env already steps the whole batch, evaluate with `--eval.use_async_envs=false`: a worker process would only copy every observation batch between processes, and a server would build the simulator a second time, in the worker.
 
+### Simulator resources across server sessions
+
+A repository may optionally export `resource_context(task: str, **make_env_kwargs)`, returning a context
+manager. The simulator server enters it once before constructing worlds, retains it across client
+close/reconnect, and exits it after attempting every session/world close and transport close. Repositories
+without the hook keep a no-op context. The task and options are the same ones passed to `vector_env_fns`.
+
+Keep process-wide simulator startup/shutdown in this provider-owned context. Individual environments'
+`close()` methods release their worlds and return; they must not terminate the server. Errors escaping
+startup, serving or final cleanup reach the context after cleanup attempts. Errors handled by the session
+protocol leave the server and context alive for another client. A context whose shutdown terminates Python
+must preserve the received error status and diagnostic. This hook is currently used by the simulator server;
+it does not add resource management to local factories.
+
 ## Security Considerations
 
 <Tip warning={true}>
