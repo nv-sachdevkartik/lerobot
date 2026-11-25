@@ -11,7 +11,7 @@ Use a Linux RTX host with NVIDIA driver 580 or newer, Docker Compose with GPU su
 ```bash
 git clone --branch arena-envhub-review https://github.com/nv-sachdevkartik/lerobot.git
 cd lerobot
-git checkout e49d022bcc0d52258d527bc12f778475576dc6bc
+git checkout cfb63bf4a4d53fc51c67759748282aad987a8dfe
 uv sync --locked --extra remote
 source .venv/bin/activate
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
@@ -28,7 +28,7 @@ lerobot-env-server --docker=true --envhub="$ARENA_ENVHUB" --trust_remote_code=tr
   --sim.task=gr1_open_microwave --max_sessions=1 --max_envs=2
 ```
 
-The server listens on localhost, port 7448. Keep the client in its own Python environment. To stop the server, repeat the launch command with `--stop=true`.
+On hosts with the Docker bridge disabled, set `SIM_BUILD_NETWORK=host` before building. The server listens on localhost, port 7448. Keep the client in its own Python environment. To stop the server, repeat the launch command with `--stop=true`.
 
 ## Evaluating policies
 
