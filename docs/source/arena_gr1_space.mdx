@@ -27,7 +27,7 @@ In the container shell, install the provider requirements and the LeRobot server
 
 ```bash
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=582ea28742d418c908fa33f6ea821b4388689ed9
+export SPACE_REV=dc177ec6a75004867fda7059307e228321597852
 export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 
 hf download "$SPACE_ID" requirements.txt --repo-type space --revision "$SPACE_REV" --local-dir /tmp/arena-gr1
@@ -101,6 +101,30 @@ Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microw
 Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. For tasks with **Open 3D view**, drag to orbit, scroll to zoom, and select a body to inspect or pose a joint. Running a policy uses the native Arena environment on the GPU.
 
 Under **Run this task**, use **EnvHub server** to start the selected environment, then **Policy inference** in the LeRobot client. **Native scene** opens the same server with the Isaac Sim viewport on a machine with a display. For example, Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client. A seeded random run checks whether LeRobot can send actions and receive observations for that task.
+
+For a YAML task, select the catalog entrypoint on both sides. For example, the clutter task below uses Franka IK at 15 Hz. Start the server in the Arena container.
+
+```bash
+export TASK=clutter/franka_three_hammers_and_clamp_no_task
+isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
+  --envhub="$ARENA_ENVHUB:catalog_env.py" --trust_remote_code=true --sim.task="$TASK" \
+  --sim.robot_type=franka_ik --sim.control_mode=delta --sim.fps=15 \
+  --zenoh.listen_endpoints='["tcp/127.0.0.1:7448"]' --max_sessions=1 --max_envs=1
+```
+
+In the client shell, set `SPACE_ID`, `SPACE_REV`, `ARENA_ENVHUB` and `TASK` to the same values. Install the Space’s random policy and read the action width from the server.
+
+```bash
+SNAPSHOT=$(hf download "$SPACE_ID" --repo-type space --revision "$SPACE_REV" --include 'random_policy/*')
+uv pip install --python "$(command -v python)" --no-deps "$SNAPSHOT/random_policy"
+export ENDPOINT=tcp/127.0.0.1:7448
+WIDTH=$(python "$SNAPSHOT/random_policy/describe_action.py" --endpoint "$ENDPOINT" --task "$TASK")
+lerobot-eval \
+  --policy.type=arena_random --policy.action_dim="$WIDTH" --policy.device=cpu \
+  --env.type=envhub --env.hub_path="$ARENA_ENVHUB:catalog_env.py" --env.task="$TASK" \
+  --env.server.endpoint="$ENDPOINT" --eval.n_episodes=1 --eval.batch_size=1 \
+  --eval.use_async_envs=false --eval.max_episode_steps=3 --seed=43
+```
 
 ## Environment configuration
 
