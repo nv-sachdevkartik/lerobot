@@ -2,7 +2,7 @@
 
 Evaluate a policy that opens a microwave with the Fourier GR1 humanoid. IsaacLab Arena runs the robot, kitchen scene and wrist controller in Isaac Sim. LeRobot runs the policy in a second Python environment and connects to the simulator through [EnvHub](./envhub).
 
-![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/resolve/d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab/assets/Gr1OpenMicrowaveEnvironment.png)
+![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/resolve/40bb14c5b2397ee16a47af7b6488ba8b8c40d692/assets/Gr1OpenMicrowaveEnvironment.png)
 
 ## Installation
 
@@ -11,11 +11,11 @@ Use a Linux RTX host with NVIDIA driver 580 or newer, Docker Compose with GPU su
 ```bash
 git clone --branch arena-envhub-review https://github.com/nv-sachdevkartik/lerobot.git
 cd lerobot
-git checkout 78642cdeff8726a19f8b8e8f3e6855ee13709e44
+git checkout 9f007f07937508be32aa0ff681f1479e9116670c
 uv sync --locked --extra remote
 source .venv/bin/activate
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab
+export SPACE_REV=40bb14c5b2397ee16a47af7b6488ba8b8c40d692
 export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 ```
 
@@ -101,7 +101,7 @@ lerobot-eval \
   --eval.use_async_envs=false --eval.max_episode_steps=3 --seed=43
 ```
 
-Inspect the random-policy result in `eval_info.json`. The video writer can fail separately when PyAV receives a floating-point frame rate from the remote environment.
+Read the episode metrics in `eval_info.json`.
 
 ## Environment configuration
 
