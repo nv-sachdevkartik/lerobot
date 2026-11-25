@@ -10,11 +10,11 @@ You need a Linux machine with an RTX GPU, a driver compatible with Isaac Sim 6.2
 
 ### Set up the simulator
 
-From a new working directory, check out Arena and LeRobot. Arena's Docker script builds the simulator image with its pinned Isaac Lab submodule. The `-e` option makes the LeRobot checkout available inside the container at `/eval/lerobot`.
+From a new working directory, check out Arena and LeRobot. Arena's Docker script builds the simulator image with its pinned Isaac Lab submodule. The `-e` option makes the LeRobot checkout available inside the container at `$HOME/eval/lerobot`.
 
 ```bash
-git clone https://github.com/nv-sachdevkartik/IsaacLab-Arena.git
-git -C IsaacLab-Arena checkout 210641561fa62768cb3338e9e35a216989924541
+git clone https://github.com/isaac-sim/IsaacLab-Arena.git
+git -C IsaacLab-Arena checkout 0942242d88814e1e6762571ad2e215dd2c56dc79
 git -C IsaacLab-Arena -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init
 
 mkdir -p arena-client
@@ -27,15 +27,15 @@ In the container shell, install the provider requirements and the LeRobot server
 
 ```bash
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=38b1c664c376aa8d1026ecac6c659d9ad179de73
+export SPACE_REV=582ea28742d418c908fa33f6ea821b4388689ed9
 export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 
 hf download "$SPACE_ID" requirements.txt --repo-type space --revision "$SPACE_REV" --local-dir /tmp/arena-gr1
 uv pip install --python /opt/isaaclab-venv/bin/python -r /tmp/arena-gr1/requirements.txt
-uv pip install --python /opt/isaaclab-venv/bin/python --no-deps -e /eval/lerobot
+uv pip install --python /opt/isaaclab-venv/bin/python --no-deps -e "$HOME/eval/lerobot"
 ```
 
-To use a local provider, place the complete Space folder at `arena-client/provider` on the host. In the container, set `ARENA_ENVHUB=/eval/provider`, skip the download, and install requirements from `/eval/provider/requirements.txt`.
+To use a local provider, place the complete Space folder at `arena-client/provider` on the host. In the container, set `ARENA_ENVHUB="$HOME/eval/provider"`, skip the download, and install requirements from `"$HOME/eval/provider/requirements.txt"`.
 
 ### Start the environment server
 
@@ -67,10 +67,10 @@ Open a second terminal on the host, starting in the directory where you cloned A
 cd arena-client/lerobot
 uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
 source .venv/bin/activate
-export ARENA_ENVHUB=nvkartik/isaaclab-arena-envs-v070@38b1c664c376aa8d1026ecac6c659d9ad179de73
+export ARENA_ENVHUB=nvkartik/isaaclab-arena-envs-v070@582ea28742d418c908fa33f6ea821b4388689ed9
 ```
 
-For a local provider, set `ARENA_ENVHUB=/eval/provider` here too. Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
+For a local provider, set `ARENA_ENVHUB` to the same absolute path you passed to the server (including its container username). Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
 
 ```bash
 lerobot-eval \
@@ -96,6 +96,8 @@ uv sync --locked --extra smolvla --extra pi --extra dataset --extra evaluation -
 
 Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microwave`, `--policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188`, and `--output_dir=outputs/arena-pi05`. Keep the camera rename. The first action can take several minutes while the policy compiles. When you finish evaluating, stop the server with Ctrl+C.
 
+The same Space can serve other Arena tasks. For example, the Franka joint-position entrypoint uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object` on the server. Select the same provider and task on the client and use a matching Franka policy.
+
 ## Environment configuration
 
 | Setting | GR1 microwave task                                                                                                               |
@@ -110,7 +112,7 @@ For training data, see the [Arena GR1 manipulation dataset](https://huggingface.
 
 ## Troubleshooting
 
-- **The Space download returns 401 or 404.** Check that the Hub account used by the simulator can open the private Space and that the revision belongs to the Space. For a local copy, keep `env.py` and `isaaclab_env_wrapper.py` in the same directory.
+- **The Space download returns 401 or 404.** Check that the Hub account used by the simulator can open the private Space and that the revision belongs to the Space. For a local copy, copy the entire Space snapshot, including the shared provider modules.
 - **The client cannot connect.** Wait for the server's task-ready message and check that its listening port matches `--env.server.endpoint`. The example runs both processes on the same host.
 - **A change of Space revision has no effect.** Restart the server so it imports the provider and its helper from the new revision.
 
