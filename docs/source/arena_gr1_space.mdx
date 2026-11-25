@@ -52,7 +52,7 @@ isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
   --max_sessions=1 --max_envs=2
 ```
 
-Use host networking for this loopback endpoint, or connect the client to the server through an SSH tunnel. Wait for `Serving` after the scene loads. Keep this process running while the client evaluates. One Kit application owns the native batch and serves one session at a time. Restart the server to switch Space revisions. LeRobot caches imported entry modules for the life of the process, and two revisions can share the same cached `env.py` while shipping different helpers.
+Use host networking for this loopback endpoint, or connect the client to the server through an SSH tunnel. Wait for `Serving envhub task 'gr1_open_microwave'` before starting the client. Keep this process running while the client evaluates. One Kit application owns the native batch and serves one session at a time. Restart the server to switch Space revisions. LeRobot caches imported entry modules for the life of the process, and two revisions can share the same cached `env.py` while shipping different helpers.
 
 ## Evaluate SmolVLA
 
@@ -74,6 +74,10 @@ lerobot-eval \
 The explicit rename connects the policy's trained camera input to the 512×512 robot POV camera. Inspect the episode success in `eval_info.json` and the rendered episode under `videos/`. The environment runs at 50 Hz with a native 250-step horizon. A successful opening ends an episode early. For a native batch of two, set both the batch size and episode count to two and choose a fresh output directory. A completed slot retains its terminal observation and outcome while a peer finishes. Stop the server with Ctrl+C when the client exits.
 
 The 54 state values are joint positions in radians. The 36 actions are two absolute wrist poses (XYZ in metres and `wxyz` quaternions) followed by 22 hand joint targets in radians. The provider also exposes eight auxiliary observation tensors. The checkpoints remain **model** repositories. [SmolVLA model](https://huggingface.co/nvidia/smolvla-arena-gr1-microwave) · [PI0.5 model](https://huggingface.co/nvidia/pi05-arena-gr1-microwave)
+
+## Verified Space run
+
+On November 25, 2026, the standard server loaded the pinned Space into an empty Hub cache on an RTX PRO 6000. SmolVLA opened the microwave in one episode with seed 42 and in both episodes of a native batch of two with seed 43. All three POV videos decoded at 512×512 and 50 fps and showed the door opening. Both evaluations and the server exited with status 0.
 
 ## Compatibility with the previous provider
 
