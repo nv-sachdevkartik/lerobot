@@ -2,7 +2,7 @@
 
 Evaluate a policy that opens a microwave with the Fourier GR1 humanoid. IsaacLab Arena runs the robot, kitchen scene and wrist controller in Isaac Sim. LeRobot runs the policy in a second Python environment and connects to the simulator through [EnvHub](./envhub).
 
-![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/nvkartik/isaaclab-arena-envs-v070/resolve/0fc4587e743db393e7fc4cdb5736aee033c231f7/assets/Gr1OpenMicrowaveEnvironment.png)
+![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/nvidia/isaaclab-arena-envs/resolve/489d48af6f39196f07de9a87e7d42ce922e45545/assets/Gr1OpenMicrowaveEnvironment.png)
 
 ## Installation
 
@@ -96,7 +96,11 @@ uv sync --locked --extra smolvla --extra pi --extra dataset --extra evaluation -
 
 Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microwave`, `--policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188`, and `--output_dir=outputs/arena-pi05`. Keep the camera rename. The first action can take several minutes while the policy compiles. When you finish evaluating, stop the server with Ctrl+C.
 
-Browse the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) to find Python environments and YAML task specifications. Each entry includes the native Arena command for that task. The same Space can serve other Arena tasks through its LeRobot controller entrypoints. For example, the Franka joint-position entrypoint uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object` on the server. Select the same provider and task on the client and use a matching Franka policy.
+## Explore other Arena tasks
+
+Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. For tasks with **Open 3D view**, drag to orbit, scroll to zoom, and select a body to inspect or pose a joint. Running a policy uses the native Arena environment on the GPU.
+
+Under **Run this task**, use **EnvHub server** to start the selected environment, then **Policy inference** in the LeRobot client. **Native scene** opens the same server with the Isaac Sim viewport on a machine with a display. For example, Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client. A seeded random run checks whether LeRobot can send actions and receive observations for that task.
 
 ## Environment configuration
 
