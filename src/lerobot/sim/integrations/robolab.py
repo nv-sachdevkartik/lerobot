@@ -216,7 +216,7 @@ def vector_env_fns(
     return {name: {0: partial(make, name)} for name in names}
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
     """Return RoboLab's control rate, joint-position control and DROID's names; LeRobot's DROID records ``Franka``."""
     return {
         "fps": CONTROL_FPS,
