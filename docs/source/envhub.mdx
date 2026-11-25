@@ -117,6 +117,8 @@ RUN python -m venv "$VIRTUAL_ENV" && pip install --no-cache-dir gymnasium numpy
 - set `VIRTUAL_ENV` to the Python 3.12 (or newer) environment `env.py` runs in, with its `bin` first on `PATH`. The server adds missing runtime packages from `docker/sim/requirements.native.txt`. It constrains packages already installed in this environment to their installed versions. A conflict with a required range produces a build error.
 - set what the simulator needs to start with `ENV`, or in its `ENTRYPOINT`, which runs the server.
 
+If your Docker host has its default bridge disabled, set `SIM_BUILD_NETWORK=host` for the build. The launcher passes the selection to both image builds.
+
 ### `make_env`
 
 `env.py` must define `make_env(n_envs: int = 1, use_async_envs: bool = False, **kwargs)`, which returns `{suite_name: {task_id: vector_env}}`, each vector env holding `n_envs` environments of that task:

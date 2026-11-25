@@ -186,6 +186,8 @@ def run_in_docker(cfg: EnvServerLaunchConfig) -> None:
                         "-t",
                         env["ENVHUB_IMAGE"],
                     ]
+                    if network := env.get("SIM_BUILD_NETWORK"):
+                        build.extend(["--network", network])
                     subprocess.run([*build, str(context)], env=env, check=True)  # nosec B603
         command.append("sim")
     subprocess.run(command, env=env, check=True)  # nosec B603

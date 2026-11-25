@@ -172,7 +172,11 @@ def test_docker_launch_builds_a_local_envhub_directory(tmp_path, monkeypatch):
     assert "ENVHUB_IMAGE" not in env
 
 
-def test_docker_launch_builds_the_repository_image_first(tmp_path, monkeypatch):
+@pytest.mark.parametrize("network", [None, "host"])
+def test_docker_launch_builds_the_repository_image_first(tmp_path, monkeypatch, network):
+    monkeypatch.delenv("SIM_BUILD_NETWORK", raising=False)
+    if network:
+        monkeypatch.setenv("SIM_BUILD_NETWORK", network)
     calls = []
     monkeypatch.setattr(
         lerobot_env_server.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs))
@@ -191,7 +195,11 @@ def test_docker_launch_builds_the_repository_image_first(tmp_path, monkeypatch):
     lerobot_env_server.main()
     build, compose = calls[-2][0], calls[-1]
     image = f"lerobot-envhub-simulator:local-{tmp_path.name.lower()}"
-    assert build == ["docker", "build", "-f", str(tmp_path / "envhub.Dockerfile"), "-t", image, str(tmp_path)]
+    expected = ["docker", "build", "-f", str(tmp_path / "envhub.Dockerfile"), "-t", image]
+    if network:
+        expected.extend(["--network", network])
+        assert compose[1]["env"]["SIM_BUILD_NETWORK"] == network
+    assert build == [*expected, str(tmp_path)]
     # The server's image builds on top of it.
     assert compose[0][-5:] == ["up", "-d", "--wait", "--build", "sim"]
     assert compose[1]["env"]["ENVHUB_IMAGE"] == image

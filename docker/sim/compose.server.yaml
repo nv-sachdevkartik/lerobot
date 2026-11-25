@@ -4,6 +4,7 @@ services:
     image: lerobot-sim-${SIM:?Select a backend}:${SIM_TAG:-local}
     build:
       context: ../..
+      network: ${SIM_BUILD_NETWORK:-default}
       dockerfile: docker/Dockerfile.sim
       args:
         SIM: ${SIM}
