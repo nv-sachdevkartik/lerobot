@@ -11,7 +11,7 @@ Use a Linux RTX host with NVIDIA driver 580 or newer, Docker Compose with GPU su
 ```bash
 git clone --branch arena-envhub-review https://github.com/nv-sachdevkartik/lerobot.git
 cd lerobot
-git checkout cfb63bf4a4d53fc51c67759748282aad987a8dfe
+git checkout 78642cdeff8726a19f8b8e8f3e6855ee13709e44
 uv sync --locked --extra remote
 source .venv/bin/activate
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
@@ -44,9 +44,6 @@ Open a second terminal on the host, starting in the fork’s LeRobot checkout. I
 ```bash
 uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
 source .venv/bin/activate
-export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab
-export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 ```
 
 Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
@@ -56,7 +53,7 @@ lerobot-eval \
   --policy.path=nvidia/smolvla-arena-gr1-microwave \
   --policy.pretrained_revision=1fab07da0ffb6c263c9703c296745a730a6ea696 \
   --policy.device=cuda \
-  --env.type=envhub --env.hub_path="$ARENA_ENVHUB" \
+  --env.type=envhub \
   --env.task=gr1_open_microwave --env.server.endpoint=tcp/127.0.0.1:7448 \
   --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
   --eval.batch_size=1 --eval.n_episodes=1 --eval.use_async_envs=false \
@@ -79,9 +76,9 @@ Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microw
 
 Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. The 3D view opens automatically. Drag to orbit, use **Run** or **Step** for browser physics, or choose **Inspect scene** to inspect a body. Choose **Open preview** to see the available recording or reference image. Running a policy uses the native Arena environment on the GPU.
 
-The public explorer shows commands for its stable provider. To try the review versions, use the pinned commands below. Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client.
+The public explorer shows commands for its stable provider. To try the review versions, use the pinned commands below. Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Select the same task on the client.
 
-For a YAML task, select the catalog entrypoint on both sides. For example, the clutter task below uses Franka IK at 15 Hz. Start the server from the LeRobot checkout on the host.
+For a YAML task, start the server with the catalog entrypoint. For example, the clutter task below uses Franka IK at 15 Hz. Start the server from the LeRobot checkout on the host.
 
 ```bash
 export TASK=clutter/franka_three_hammers_and_clamp_no_task
@@ -90,7 +87,7 @@ lerobot-env-server --docker=true \
   --zenoh.listen_endpoints='["tcp/127.0.0.1:7448"]' --max_sessions=1 --max_envs=1
 ```
 
-In the client shell, set `SPACE_ID`, `SPACE_REV`, `ARENA_ENVHUB` and `TASK` to the same values. Install the Space’s random policy and read the action width from the server.
+In the client shell, set `SPACE_ID` and `SPACE_REV` for the random-policy download, and select the server’s `TASK`. Install the Space’s random policy and read the action width from the server.
 
 ```bash
 SNAPSHOT=$(hf download "$SPACE_ID" --repo-type space --revision "$SPACE_REV" --include 'random_policy/*')
@@ -99,7 +96,7 @@ export ENDPOINT=tcp/127.0.0.1:7448
 WIDTH=$(python "$SNAPSHOT/random_policy/describe_action.py" --endpoint "$ENDPOINT" --task "$TASK")
 lerobot-eval \
   --policy.type=arena_random --policy.action_dim="$WIDTH" --policy.device=cpu \
-  --env.type=envhub --env.hub_path="$ARENA_ENVHUB:catalog_env.py" --env.task="$TASK" \
+  --env.type=envhub --env.task="$TASK" \
   --env.server.endpoint="$ENDPOINT" --eval.n_episodes=1 --eval.batch_size=1 \
   --eval.use_async_envs=false --eval.max_episode_steps=3 --seed=43
 ```
