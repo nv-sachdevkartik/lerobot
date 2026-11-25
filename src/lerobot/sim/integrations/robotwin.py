@@ -661,7 +661,7 @@ def env_fns(
     return {k: dict(v) for k, v in out.items()}
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
     """Return RoboTwin's default fps, control mode, state and action names, and robot type."""
     # Left arm first; each arm has six joints, then its gripper.
     joints = tuple(

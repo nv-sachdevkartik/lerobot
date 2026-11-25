@@ -275,7 +275,7 @@ def env_fns(
     }
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
     """Return RoboMME's default fps, control mode, and state and action names."""
     joints = (*(f"joint_{i}.pos" for i in range(7)), "gripper.pos")
     joint_actions = kwargs.get("action_space_type", "joint_angle") == "joint_angle"

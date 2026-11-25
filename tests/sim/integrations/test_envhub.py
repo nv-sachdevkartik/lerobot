@@ -220,6 +220,27 @@ def test_envhub_settings_come_from_the_repository(hub_repo):
     assert "'gripper_indices'; expected" in message
 
 
+def test_envhub_settings_can_differ_per_task(hub_repo):
+    # One repository serving tasks with different robots and rates describes each from its task and options.
+    hub_repo(
+        _ENVHUB_ENV
+        + "def LEROBOT_SIM(task, arm='so_follower', **options):\n"
+        + "    return {'fps': 15 if task == 'slow' else 50, 'robot_type': arm}\n"
+    )
+    sim = {"type": "envhub", "kwargs": {"hub_path": "user/reach", "trust_remote_code": True}}
+    assert SimConfig.resolve({**sim, "task": "slow"}).fps == 15
+    fast = SimConfig.resolve(
+        {**sim, "task": "fast", "kwargs": {**sim["kwargs"], "make_env_kwargs": {"arm": "panda"}}}
+    )
+    assert (fast.fps, fast.robot_type) == (50, "panda")
+    # In-process, --env.task reaches it as the server's --sim.task does.
+    config = HubEnvConfig(hub_path="user/reach", trust_remote_code=True, task="slow")
+    assert config.sim_config().fps == 15
+    hub_repo(_ENVHUB_ENV + "def LEROBOT_SIM(task, **options):\n    return [('fps', 15)]\n")
+    with pytest.raises(TypeError, match="must return a dict"):
+        SimConfig.resolve({**sim, "task": "slow"})
+
+
 def test_envhub_rejects_custom_vector_behavior_without_unwrapping_it():
     class CustomBatch(gym.vector.SyncVectorEnv):
         def step(self, actions):
@@ -346,6 +367,37 @@ def test_envhub_runs_a_batched_repository_one_task_at_a_time(hub_repo, monkeypat
     finally:
         for env in envs.values():
             env.close()
+
+
+def test_envhub_batched_repository_receives_the_requested_task(hub_repo, monkeypatch):
+    # A repo whose suites are expensive to list builds only the one asked for, as served with --sim.task.
+    hub_repo(
+        _BATCHED_ENV
+        + '\n\ndef vector_env_fns(task, n_envs, spacing=1.0):\n    return {task or "reach_batch": {0: partial(ReachBatch, n_envs, 0.0)}}\n'
+    )
+    monkeypatch.setattr(builtins, "envhub_builds", [], raising=False)
+    envs = make_env(HubEnvConfig(hub_path="user/reach", trust_remote_code=True, task="push"), 2)
+    try:
+        assert list(envs) == ["push"]
+    finally:
+        envs["push"][0].close()
+
+
+def test_envhub_builds_only_the_requested_suite(hub_repo, monkeypatch):
+    # Each suite's simulator is expensive (e.g. a GPU world): the env is described from the one requested.
+    hub_repo(
+        _BATCHED_ENV
+        + '\n\ndef vector_env_fns(task, n_envs, spacing=1.0):\n    return {"near": {0: partial(ReachBatch, n_envs, 0.0)}, "far": {0: partial(ReachBatch, n_envs, 5.0)}}\n'
+    )
+    monkeypatch.setattr(builtins, "envhub_builds", [], raising=False)
+    envs = make_env(HubEnvConfig(hub_path="user/reach", trust_remote_code=True, task="far"), 2)
+    try:
+        assert list(envs) == ["far"]
+        assert builtins.envhub_builds == [5.0]
+    finally:
+        envs["far"][0].close()
+    with pytest.raises(ValueError, match=r"Unknown task 'other'; this environment has \['far', 'near'\]"):
+        make_env(HubEnvConfig(hub_path="user/reach", trust_remote_code=True, task="other"), 2)
 
 
 def test_envhub_batched_repository_must_not_autoreset(hub_repo, monkeypatch):
