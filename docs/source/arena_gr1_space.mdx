@@ -1,0 +1,82 @@
+# Evaluate a policy on the IsaacLab Arena GR1 microwave task
+
+[![LeRobot EnvHub](https://img.shields.io/badge/LeRobot-EnvHub-blue)](./envhub)
+
+The GR1 PINK task asks the humanoid to reach out and open the microwave. The static Space displays the preview and distributes the environment code. Isaac Sim runs on your GPU, and a separate LeRobot client runs the policy.
+
+![GR1 facing the microwave in the Arena kitchen](https://huggingface.co/nvkartik/isaaclab-arena-envs-v070/resolve/0fc4587e743db393e7fc4cdb5736aee033c231f7/assets/Gr1OpenMicrowaveEnvironment.png)
+
+The public preview comes from the previously qualified model repository. LeRobot now resolves environment IDs as **Spaces**. The GR1 provider is available to authorized users of the [private staging Space](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/tree/38b1c664c376aa8d1026ecac6c659d9ad179de73). You can also serve a reviewed local checkout. The [LeRobot 0.4 tutorial](./envhub_isaaclab_arena) covers the deprecated Isaac Sim 5.1 integration.
+
+## Prepare the simulator and client
+
+Use the [Arena fork at `21064156`](https://github.com/nv-sachdevkartik/IsaacLab-Arena/tree/210641561fa62768cb3338e9e35a216989924541) with its pinned Isaac Lab submodule (`e3f7d9ff`) and Isaac Sim 6.2. Its [container build script](https://github.com/nv-sachdevkartik/IsaacLab-Arena/blob/210641561fa62768cb3338e9e35a216989924541/docker/build_docker.sh) provisions the native stack. Use an RTX GPU and a driver compatible with the image. Make the Arena checkout and assets available at their expected runtime paths.
+
+Install LeRobot from [`b07adcc5`](https://github.com/huggingface/lerobot/tree/b07adcc5e3ce42c26a248236dbb3571f84c28c43) on both sides. Inside the prepared image, use its Python environment for the server. Supply the provider's reviewed root `requirements.txt` from the staged tree or the selected Space commit. Those requirements assume Isaac Sim, Isaac Lab and Arena are already installed.
+
+```bash
+# Inside the prepared Arena image
+uv pip install --python /opt/isaaclab-venv/bin/python -r /path/to/requirements.txt
+uv pip install --python /opt/isaaclab-venv/bin/python --no-deps -e /path/to/lerobot
+export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
+```
+
+In a separate shell on the policy host, from the pinned LeRobot checkout:
+
+```bash
+uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
+source .venv/bin/activate
+```
+
+## Start the standard environment server
+
+Select one provider in the simulator shell. For local staging, use the absolute directory containing both `env.py` and `isaaclab_env_wrapper.py`:
+
+```bash
+export ARENA_ENVHUB=/path/inside/container/to/provider
+```
+
+For remote loading, select the reviewed **Space** commit below. Run the server on a host authorized to read the private Space. The CLI takes `owner/name@commit`, while the browser URL has a `/spaces/` prefix.
+
+```bash
+export ARENA_ENVHUB=nvkartik/isaaclab-arena-envs-v070@38b1c664c376aa8d1026ecac6c659d9ad179de73
+```
+
+Start one server inside the prepared image. The command runs the standard `lerobot-env-server` module with the native Python launcher.
+
+```bash
+isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
+  --envhub="$ARENA_ENVHUB" --trust_remote_code=true \
+  --sim.task=gr1_open_microwave \
+  '--zenoh.listen_endpoints=["tcp/127.0.0.1:7448"]' \
+  --max_sessions=1 --max_envs=2
+```
+
+Use host networking for this loopback endpoint, or connect the client to the server through an SSH tunnel. Wait for `Serving` after the scene loads. Keep this process running while the client evaluates. One Kit application owns the native batch and serves one session at a time. Restart the server to switch Space revisions. LeRobot caches imported entry modules for the life of the process, and two revisions can share the same cached `env.py` while shipping different helpers.
+
+## Evaluate SmolVLA
+
+In the client shell, set `ARENA_ENVHUB` to the same value as in the simulator shell. The served client selects the task from the server descriptor. The provider files only need to be present on the simulator. Download the policy, including its processors, into a fresh directory from the pinned model revision. The client also needs the [SmolVLM tokenizer and backbone metadata](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/tree/7b375e1b73b11138ff12fe22c8f2822d8fe03467).
+
+```bash
+hf download nvidia/smolvla-arena-gr1-microwave --repo-type model \
+  --revision 1fab07da0ffb6c263c9703c296745a730a6ea696 --local-dir ./smolvla-snapshot
+lerobot-eval \
+  --policy.path=./smolvla-snapshot \
+  --policy.device=cuda \
+  --env.type=envhub --env.hub_path="${ARENA_ENVHUB:?set the provider used by the server}" \
+  --env.task=gr1_open_microwave --env.server.endpoint=tcp/127.0.0.1:7448 \
+  --rename_map='{"observation.images.robot_pov_cam_rgb":"observation.images.robot_pov_cam"}' \
+  --eval.batch_size=1 --eval.n_episodes=1 --eval.use_async_envs=false \
+  --seed=42 --output_dir=outputs/arena-smolvla
+```
+
+The explicit rename connects the policy's trained camera input to the 512×512 robot POV camera. Inspect the episode success in `eval_info.json` and the rendered episode under `videos/`. The environment runs at 50 Hz with a native 250-step horizon. A successful opening ends an episode early. For a native batch of two, set both the batch size and episode count to two and choose a fresh output directory. A completed slot retains its terminal observation and outcome while a peer finishes. Stop the server with Ctrl+C when the client exits.
+
+The 54 state values are joint positions in radians. The 36 actions are two absolute wrist poses (XYZ in metres and `wxyz` quaternions) followed by 22 hand joint targets in radians. The provider also exposes eight auxiliary observation tensors. The checkpoints remain **model** repositories. [SmolVLA model](https://huggingface.co/nvidia/smolvla-arena-gr1-microwave) · [PI0.5 model](https://huggingface.co/nvidia/pi05-arena-gr1-microwave)
+
+## Compatibility with the previous provider
+
+The November 6 qualification used the same native task and checkpoints with the earlier provider. SmolVLA completed three successful episodes across batches of one and two. PI0.5 at `9cf88e758aeb86be15e0f44364cad19cede23188` completed one successful episode. A separate recording produced 19 frames, and the original server passed its normal shutdown, startup error and reconnect checks. These results are historical.
+
+Use the separate policy environment. The earlier in-process evaluation failed before simulator launch when G05 imported a vision API missing from the native Transformers 5.10.4 installation. In-process policy evaluation on this stack remains unqualified.

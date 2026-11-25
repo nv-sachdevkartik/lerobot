@@ -129,6 +129,8 @@
     title: Simulation
   - local: envhub
     title: "EnvHub: Share a Simulator on the Hub"
+  - local: arena_gr1_space
+    title: IsaacLab Arena GR1 microwave Space
   - local: adding_benchmarks
     title: Adding a Benchmark
   - local: envhub_leisaac
