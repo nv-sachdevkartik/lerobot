@@ -2,55 +2,33 @@
 
 Evaluate a policy that opens a microwave with the Fourier GR1 humanoid. IsaacLab Arena runs the robot, kitchen scene and wrist controller in Isaac Sim. LeRobot runs the policy in a second Python environment and connects to the simulator through [EnvHub](./envhub).
 
-![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/resolve/dc177ec6a75004867fda7059307e228321597852/assets/Gr1OpenMicrowaveEnvironment.png)
+![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/resolve/d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab/assets/Gr1OpenMicrowaveEnvironment.png)
 
 ## Installation
 
-You need a Linux machine with an RTX GPU, a driver compatible with Isaac Sim 6.2, Docker with NVIDIA GPU support, Git LFS, and `uv`. The [Hugging Face Space](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) hosts the browser scene viewer and the EnvHub provider.
-
-### Set up the simulator
-
-From a new working directory, check out Arena and LeRobot. Arena's Docker script builds the simulator image with its pinned Isaac Lab submodule. The `-e` option makes the LeRobot checkout available inside the container at `$HOME/eval/lerobot`.
+Use a Linux RTX host with NVIDIA driver 580 or newer, Docker Compose with GPU support, Git and `uv`. This review version uses the LeRobot fork with [the simulator-image draft](https://github.com/huggingface/lerobot/pull/5508) and [task-aware conventions](https://github.com/huggingface/lerobot/pull/5513).
 
 ```bash
-git clone https://github.com/isaac-sim/IsaacLab-Arena.git
-git -C IsaacLab-Arena checkout 0942242d88814e1e6762571ad2e215dd2c56dc79
-git -C IsaacLab-Arena -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init
-
-mkdir -p arena-client
-git clone https://github.com/huggingface/lerobot.git arena-client/lerobot
-git -C arena-client/lerobot checkout b07adcc5e3ce42c26a248236dbb3571f84c28c43
-./IsaacLab-Arena/docker/run_docker.sh -n arena-gr1 -s gr1 -e "$PWD/arena-client"
-```
-
-In the container shell, install the provider requirements and the LeRobot server into Arena's Python environment.
-
-```bash
+git clone --branch arena-envhub-review https://github.com/nv-sachdevkartik/lerobot.git
+cd lerobot
+git checkout 73dc475c7fbd3c96924807561b1e6d6f8c29cebb
+uv sync --locked --extra remote
+source .venv/bin/activate
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=dc177ec6a75004867fda7059307e228321597852
+export SPACE_REV=d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab
 export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
-
-hf download "$SPACE_ID" requirements.txt --repo-type space --revision "$SPACE_REV" --local-dir /tmp/arena-gr1
-uv pip install --python /opt/isaaclab-venv/bin/python -r /tmp/arena-gr1/requirements.txt
-uv pip install --python /opt/isaaclab-venv/bin/python --no-deps -e "$HOME/eval/lerobot"
 ```
-
-To use a local provider, place the complete Space folder at `arena-client/provider` on the host. In the container, set `ARENA_ENVHUB="$HOME/eval/provider"`, skip the download, and install requirements from `"$HOME/eval/provider/requirements.txt"`.
 
 ### Start the environment server
 
-Run this in the same container shell. The server uses the GR1 PINK controller and listens on the host's loopback interface.
+The first launch builds Arena and its locked Isaac Lab and Isaac Sim dependencies, then adds the server from this LeRobot checkout. Review the provider’s `envhub.Dockerfile` before running it. The image sets the Isaac Sim license acceptance flags for unattended startup. Use it if you accept the [Isaac Sim license](https://docs.isaacsim.omniverse.nvidia.com/latest/common/NVIDIA_Omniverse_License_Agreement.html).
 
 ```bash
-export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
-isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
-  --envhub="$ARENA_ENVHUB" --trust_remote_code=true \
-  --sim.task=gr1_open_microwave \
-  --zenoh.listen_endpoints='["tcp/127.0.0.1:7448"]' \
-  --max_sessions=1 --max_envs=2
+lerobot-env-server --docker=true --envhub="$ARENA_ENVHUB" --trust_remote_code=true \
+  --sim.task=gr1_open_microwave --max_sessions=1 --max_envs=2
 ```
 
-Leave the server running. The first launch loads scene assets and compiles shaders. Start the client when the log shows `Serving envhub task 'gr1_open_microwave'`.
+The server listens on localhost, port 7448. Keep the client in its own Python environment. To stop the server, repeat the launch command with `--stop=true`.
 
 ## Evaluating policies
 
@@ -61,18 +39,17 @@ Leave the server running. The first launch loads scene assets and compiles shade
 
 ### Evaluate SmolVLA
 
-Open a second terminal on the host, starting in the directory where you cloned Arena. Install the policy dependencies here. Running the policy inside the Isaac Sim 6.2 environment is unsupported with its pinned Transformers version.
+Open a second terminal on the host, starting in the fork’s LeRobot checkout. Install the policy dependencies here. Running the policy inside the Isaac Sim 6.2 environment is unsupported with its pinned Transformers version.
 
 ```bash
-cd arena-client/lerobot
 uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
 source .venv/bin/activate
 export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
-export SPACE_REV=dc177ec6a75004867fda7059307e228321597852
+export SPACE_REV=d5f24a141a5cd23f1d9f8d90b84d72102e51e4ab
 export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 ```
 
-For a local provider, set `ARENA_ENVHUB` to the same absolute path you passed to the server (including its container username). Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
+Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
 
 ```bash
 lerobot-eval \
@@ -96,21 +73,20 @@ In the client shell, install the additional policy dependencies and make sure yo
 uv sync --locked --extra smolvla --extra pi --extra dataset --extra evaluation --extra remote
 ```
 
-Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microwave`, `--policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188`, and `--output_dir=outputs/arena-pi05`. Keep the camera rename. The first action can take several minutes while the policy compiles. When you finish evaluating, stop the server with Ctrl+C.
+Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microwave`, `--policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188`, and `--output_dir=outputs/arena-pi05`. Keep the camera rename. The first action can take several minutes while the policy compiles.
 
 ## Explore other Arena tasks
 
-Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. The 3D view opens automatically. Drag to orbit, scroll to zoom, and select a body to inspect or pose a joint. Choose **Open preview** to see the available recording or reference image. Running a policy uses the native Arena environment on the GPU.
+Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. The 3D view opens automatically. Drag to orbit, use **Run** or **Step** for browser physics, or choose **Inspect scene** to inspect a body. Choose **Open preview** to see the available recording or reference image. Running a policy uses the native Arena environment on the GPU.
 
-Under **Run this task**, use **EnvHub server** to start the selected environment, then **Policy inference** in the LeRobot client. **Native scene** opens the same server with the Isaac Sim viewport on a machine with a display. For example, Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client. A seeded random run checks whether LeRobot can send actions and receive observations for that task.
+The public explorer shows commands for its stable provider. To try the review versions, use the pinned commands below. Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client.
 
-For a YAML task, select the catalog entrypoint on both sides. For example, the clutter task below uses Franka IK at 15 Hz. Start the server in the Arena container.
+For a YAML task, select the catalog entrypoint on both sides. For example, the clutter task below uses Franka IK at 15 Hz. Start the server from the LeRobot checkout on the host.
 
 ```bash
 export TASK=clutter/franka_three_hammers_and_clamp_no_task
-isaaclab.sh -p -m lerobot.scripts.lerobot_env_server \
+lerobot-env-server --docker=true \
   --envhub="$ARENA_ENVHUB:catalog_env.py" --trust_remote_code=true --sim.task="$TASK" \
-  --sim.robot_type=franka_ik --sim.control_mode=delta --sim.fps=15 \
   --zenoh.listen_endpoints='["tcp/127.0.0.1:7448"]' --max_sessions=1 --max_envs=1
 ```
 
