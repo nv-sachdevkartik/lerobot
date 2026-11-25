@@ -96,7 +96,7 @@ uv sync --locked --extra smolvla --extra pi --extra dataset --extra evaluation -
 
 Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microwave`, `--policy.pretrained_revision=9cf88e758aeb86be15e0f44364cad19cede23188`, and `--output_dir=outputs/arena-pi05`. Keep the camera rename. The first action can take several minutes while the policy compiles. When you finish evaluating, stop the server with Ctrl+C.
 
-The same Space can serve other Arena tasks. For example, the Franka joint-position entrypoint uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object` on the server. Select the same provider and task on the client and use a matching Franka policy.
+Browse the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) to find Python environments and YAML task specifications. Each entry includes the native Arena command for that task. The same Space can serve other Arena tasks through its LeRobot controller entrypoints. For example, the Franka joint-position entrypoint uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object` on the server. Select the same provider and task on the client and use a matching Franka policy.
 
 ## Environment configuration
 
