@@ -67,7 +67,9 @@ Open a second terminal on the host, starting in the directory where you cloned A
 cd arena-client/lerobot
 uv sync --locked --extra smolvla --extra dataset --extra evaluation --extra remote
 source .venv/bin/activate
-export ARENA_ENVHUB=nvkartik/isaaclab-arena-envs-v070@582ea28742d418c908fa33f6ea821b4388689ed9
+export SPACE_ID=nvkartik/isaaclab-arena-envs-v070
+export SPACE_REV=dc177ec6a75004867fda7059307e228321597852
+export ARENA_ENVHUB="$SPACE_ID@$SPACE_REV"
 ```
 
 For a local provider, set `ARENA_ENVHUB` to the same absolute path you passed to the server (including its container username). Run one episode with the pretrained checkpoint. The camera rename connects Arena's RGB stream to the image input used during training.
