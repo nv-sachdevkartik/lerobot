@@ -172,7 +172,6 @@ def run_in_docker(cfg: EnvServerLaunchConfig) -> None:
         inspect = ["docker", "image", "inspect", image]
         # Runs docker from PATH, like docker compose below.
         if cfg.build or subprocess.run(inspect, capture_output=True).returncode:  # nosec B603
-            command.append("--build")
             if backend == "envhub":
                 context = envhub_context(hub_path, directory)
                 env["ENVHUB_DIR"] = str(context)
@@ -189,6 +188,21 @@ def run_in_docker(cfg: EnvServerLaunchConfig) -> None:
                     if network := env.get("SIM_BUILD_NETWORK"):
                         build.extend(["--network", network])
                     subprocess.run([*build, str(context)], env=env, check=True)  # nosec B603
+            if env.get("SIM_BUILD_NETWORK") == "host":
+                # Compose uses Bake but cannot pass its explicit host-network grant in a noninteractive build.
+                compose_file = root / COMPOSE_FILE
+                bake = ["docker", "buildx", "bake", "--allow=network.host", f"--allow=fs.read={root}"]
+                if env.get("ENVHUB_DIR"):
+                    bake.append(f"--allow=fs.read={env['ENVHUB_DIR']}")
+                subprocess.run(  # nosec B603
+                    [*bake, "--load", "-f", compose_file.name, "sim"],
+                    cwd=compose_file.parent,
+                    env=env,
+                    check=True,
+                )
+                command.append("--no-build")
+            else:
+                command.append("--build")
         command.append("sim")
     subprocess.run(command, env=env, check=True)  # nosec B603
 

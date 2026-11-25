@@ -193,15 +193,31 @@ def test_docker_launch_builds_the_repository_image_first(tmp_path, monkeypatch, 
     ]
     monkeypatch.setattr(sys, "argv", argv)
     lerobot_env_server.main()
-    build, compose = calls[-2][0], calls[-1]
+    build, compose = calls[0][0], calls[-1]
     image = f"lerobot-envhub-simulator:local-{tmp_path.name.lower()}"
     expected = ["docker", "build", "-f", str(tmp_path / "envhub.Dockerfile"), "-t", image]
     if network:
         expected.extend(["--network", network])
+        bake, options = calls[1]
+        checkout = Path(lerobot_env_server.lerobot.__file__).resolve().parents[2]
+        compose_file = checkout / lerobot_env_server.COMPOSE_FILE
+        assert bake == [
+            "docker",
+            "buildx",
+            "bake",
+            "--allow=network.host",
+            f"--allow=fs.read={checkout}",
+            f"--allow=fs.read={tmp_path}",
+            "--load",
+            "-f",
+            compose_file.name,
+            "sim",
+        ]
+        assert options["cwd"] == compose_file.parent
         assert compose[1]["env"]["SIM_BUILD_NETWORK"] == network
     assert build == [*expected, str(tmp_path)]
     # The server's image builds on top of it.
-    assert compose[0][-5:] == ["up", "-d", "--wait", "--build", "sim"]
+    assert compose[0][-5:] == ["up", "-d", "--wait", "--no-build" if network else "--build", "sim"]
     assert compose[1]["env"]["ENVHUB_IMAGE"] == image
 
 
