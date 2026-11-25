@@ -1,0 +1,12 @@
+# Dependencies of the standalone EnvHub server. An external simulator provides its own
+# Python environment. docker/sim/requirements.txt pins the in-tree images separately.
+numpy>=2.0,<3
+gymnasium>=1.1.1,<2
+msgpack>=1.1,<2
+eclipse-zenoh>=1.9,<1.11
+pillow>=10,<14
+draccus>=0.11.6,<0.12
+# The server imports snapshot_download. Policy and training clients have their own bounds.
+huggingface-hub>=0.36,<3
+pyyaml>=6,<7
+termcolor>=2.4,<4

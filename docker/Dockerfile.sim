@@ -141,9 +141,11 @@ FROM ${ENVHUB_IMAGE:-base} AS envhub_image_native
 USER root
 COPY --from=ghcr.io/astral-sh/uv:0.11.30 /uv /uvx /usr/local/bin/
 RUN id -u user_lerobot >/dev/null 2>&1 || useradd -m user_lerobot
-COPY docker/sim/requirements.txt /tmp/sim-requirements.txt
-RUN sed 's/==/>=/' /tmp/sim-requirements.txt > /tmp/server-requirements.txt \
-    && uv pip install --no-cache -r /tmp/server-requirements.txt
+COPY docker/sim/requirements.native.txt /tmp/server-requirements.txt
+# Preserve the simulator's working set, including transitive packages. If it conflicts
+# with a server API requirement, fail the build before changing the runtime.
+RUN uv pip list --format freeze > /tmp/simulator-constraints.txt \
+    && uv pip install --no-cache -c /tmp/simulator-constraints.txt -r /tmp/server-requirements.txt
 COPY --from=envhub . /envhub
 
 # ---------------------------------------------------------------------------- RoboCasa
