@@ -2,11 +2,11 @@
 
 Evaluate a policy that opens a microwave with the Fourier GR1 humanoid. IsaacLab Arena runs the robot, kitchen scene and wrist controller in Isaac Sim. LeRobot runs the policy in a second Python environment and connects to the simulator through [EnvHub](./envhub).
 
-![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/nvidia/isaaclab-arena-envs/resolve/489d48af6f39196f07de9a87e7d42ce922e45545/assets/Gr1OpenMicrowaveEnvironment.png)
+![GR1 opening the microwave in the Arena kitchen](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070/resolve/dc177ec6a75004867fda7059307e228321597852/assets/Gr1OpenMicrowaveEnvironment.png)
 
 ## Installation
 
-You need a Linux machine with an RTX GPU, a driver compatible with Isaac Sim 6.2, Docker with NVIDIA GPU support, Git LFS, and `uv`. The environment is distributed through a [private Hugging Face Space](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070). Sign in with a Hub account that has read access, or use a local copy of the provider as described below.
+You need a Linux machine with an RTX GPU, a driver compatible with Isaac Sim 6.2, Docker with NVIDIA GPU support, Git LFS, and `uv`. The [Hugging Face Space](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) hosts the browser scene viewer and the EnvHub provider.
 
 ### Set up the simulator
 
@@ -100,7 +100,7 @@ Use the same evaluation command with `--policy.path=nvidia/pi05-arena-gr1-microw
 
 ## Explore other Arena tasks
 
-Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. For tasks with **Open 3D view**, drag to orbit, scroll to zoom, and select a body to inspect or pose a joint. Running a policy uses the native Arena environment on the GPU.
+Open the [Arena task catalog](https://huggingface.co/spaces/nvkartik/isaaclab-arena-envs-v070) and select a Python environment or YAML task. **Task source** opens the exact Arena definition. The 3D view opens automatically. Drag to orbit, scroll to zoom, and select a body to inspect or pose a joint. Choose **Open preview** to see the available recording or reference image. Running a policy uses the native Arena environment on the GPU.
 
 Under **Run this task**, use **EnvHub server** to start the selected environment, then **Policy inference** in the LeRobot client. **Native scene** opens the same server with the Isaac Sim viewport on a machine with a display. For example, Franka lift uses `--envhub="$ARENA_ENVHUB:franka.py" --sim.task=lift_object`. Use the same task and provider on the client. A seeded random run checks whether LeRobot can send actions and receive observations for that task.
 
@@ -144,7 +144,7 @@ For training data, see the [Arena GR1 manipulation dataset](https://huggingface.
 
 ## Troubleshooting
 
-- **The Space download returns 401 or 404.** Check that the Hub account used by the simulator can open the private Space and that the revision belongs to the Space. For a local copy, copy the entire Space snapshot, including the shared provider modules.
+- **The provider download returns 404.** Check the Space ID, use `--repo-type space`, and verify the pinned revision. For a local copy, copy the entire Space snapshot, including the shared provider modules.
 - **The client cannot connect.** Wait for the server's task-ready message and check that its listening port matches `--env.server.endpoint`. The example runs both processes on the same host.
 - **A change of Space revision has no effect.** Restart the server so it imports the provider and its helper from the new revision.
 
