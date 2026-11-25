@@ -542,7 +542,7 @@ def env_fns(
     return {suite: dict(task_map) for suite, task_map in out.items()}
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
     """Return LIBERO's default fps, control mode, state and action names, and robot type.
 
     LIBERO's own `control_mode` option, in `kwargs`, is `relative` (eef deltas) or `absolute` (eef poses).

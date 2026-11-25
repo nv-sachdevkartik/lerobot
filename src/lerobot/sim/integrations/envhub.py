@@ -288,12 +288,22 @@ def _build_repo_vector_env(
     return module.vector_env_fns(task=task, n_envs=n_envs, **options)[suite][task_id]()
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Return the repo's `LEROBOT_SIM` over `SIM_DEFAULTS`; an unknown key raises, naming the closest."""
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
+    """Return the repo's `LEROBOT_SIM` over `SIM_DEFAULTS`; an unknown key raises, naming the closest.
+
+    `LEROBOT_SIM` is a dict, or a function of the task and the repo's options returning one, for a repo whose
+    tasks differ (e.g. in robot or control rate).
+    """
     repo_id, module = _load_hub_module(
         kwargs["hub_path"], kwargs.get("trust_remote_code", False), kwargs.get("hub_cache_dir")
     )
     declared = getattr(module, "LEROBOT_SIM", {})
+    if callable(declared):
+        declared = declared(task, **(kwargs.get("make_env_kwargs") or {}))
+        if not isinstance(declared, dict):
+            raise TypeError(
+                f"{repo_id} LEROBOT_SIM({task!r}) must return a dict, got {type(declared).__name__}"
+            )
     unknown = sorted(set(declared) - set(SIM_DEFAULTS))
     if unknown:
         keys = []

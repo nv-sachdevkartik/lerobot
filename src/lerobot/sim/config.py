@@ -76,7 +76,11 @@ class SimConfig:
         with simulator_required(settings["type"]):
             integration = importlib.import_module(f"lerobot.sim.integrations.{settings['type']}")
             conventions = getattr(integration, "conventions", None)
-            declared = conventions(settings.get("kwargs") or {}) if conventions else {}
+            declared = (
+                conventions(settings.get("kwargs") or {}, task=settings.get("task") or "")
+                if conventions
+                else {}
+            )
         return cls(**{**declared, **{key: value for key, value in settings.items() if value is not None}})
 
 

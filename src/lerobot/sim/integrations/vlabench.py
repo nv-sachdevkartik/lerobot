@@ -564,7 +564,7 @@ def env_fns(
     return {group: dict(task_map) for group, task_map in out.items()}
 
 
-def conventions(kwargs: dict[str, Any]) -> dict[str, Any]:
+def conventions(kwargs: dict[str, Any], task: str = "") -> dict[str, Any]:
     """Return VLABench's default fps, control mode, state and action names, and robot type."""
     names = ("eef.x", "eef.y", "eef.z", "eef.euler.x", "eef.euler.y", "eef.euler.z", "gripper.opening")
     return {

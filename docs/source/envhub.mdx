@@ -147,6 +147,13 @@ A module-level dictionary in `env.py` that describes the environment. It applies
 
 Declare it whenever the defaults do not match your environment. An unknown key is an error, naming the closest valid one. A server's `--sim.*` options override it, e.g. `--sim.fps=15`.
 
+When your tasks differ, for example in robot or control rate, define `LEROBOT_SIM` as a function returning that dictionary instead. It receives the requested task (`--env.task`, or a server's `--sim.task`) and the repository's options (`--env.make_env_kwargs`). It runs before the environment is built, so read the values from something quick to load, such as a file next to `env.py`:
+
+```python
+def LEROBOT_SIM(task: str, **make_env_kwargs) -> dict:
+    return {"fps": 15 if task == "pick" else 50, "control_mode": "delta", "robot_type": "panda"}
+```
+
 To make an environment a twin of a real robot LeRobot supports, use that robot's names, units and `robot_type`. A teleoperator then drives it as it drives the real follower, datasets recorded in simulation and on hardware match, and a checkpoint trained on one runs on the other. For an SO-101, that is `shoulder_pan.pos` ... `gripper.pos`, in degrees with the gripper from 0 to 100, and `robot_type: "so_follower"`. When LeRobot has no class for your robot, pick a short snake_case `robot_type` (`panda`, `sawyer`).
 
 ### A complete example

@@ -220,6 +220,27 @@ def test_envhub_settings_come_from_the_repository(hub_repo):
     assert "'gripper_indices'; expected" in message
 
 
+def test_envhub_settings_can_differ_per_task(hub_repo):
+    # One repository serving tasks with different robots and rates describes each from its task and options.
+    hub_repo(
+        _ENVHUB_ENV
+        + "def LEROBOT_SIM(task, arm='so_follower', **options):\n"
+        + "    return {'fps': 15 if task == 'slow' else 50, 'robot_type': arm}\n"
+    )
+    sim = {"type": "envhub", "kwargs": {"hub_path": "user/reach", "trust_remote_code": True}}
+    assert SimConfig.resolve({**sim, "task": "slow"}).fps == 15
+    fast = SimConfig.resolve(
+        {**sim, "task": "fast", "kwargs": {**sim["kwargs"], "make_env_kwargs": {"arm": "panda"}}}
+    )
+    assert (fast.fps, fast.robot_type) == (50, "panda")
+    # In-process, --env.task reaches it as the server's --sim.task does.
+    config = HubEnvConfig(hub_path="user/reach", trust_remote_code=True, task="slow")
+    assert config.sim_config().fps == 15
+    hub_repo(_ENVHUB_ENV + "def LEROBOT_SIM(task, **options):\n    return [('fps', 15)]\n")
+    with pytest.raises(TypeError, match="must return a dict"):
+        SimConfig.resolve({**sim, "task": "slow"})
+
+
 def test_envhub_rejects_custom_vector_behavior_without_unwrapping_it():
     class CustomBatch(gym.vector.SyncVectorEnv):
         def step(self, actions):
